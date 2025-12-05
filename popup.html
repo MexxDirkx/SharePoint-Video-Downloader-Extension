@@ -4,7 +4,7 @@
   <title>SharePoint Video Downloader</title>
   <style>
     body {
-      width: 400px;
+      width: 420px;
       padding: 15px;
       font-family: Arial, sans-serif;
     }
@@ -29,6 +29,16 @@
       background-color: #cccccc;
       cursor: not-allowed;
     }
+    .button-success {
+      background-color: #28a745;
+    }
+    .button-secondary {
+      background-color: #6c757d;
+    }
+    .button-small {
+      padding: 5px 10px;
+      font-size: 12px;
+    }
     input[type="text"] {
       width: 100%;
       padding: 8px;
@@ -51,6 +61,7 @@
       white-space: pre-wrap;
       word-break: break-all;
       margin: 10px 0;
+      font-size: 11px;
     }
     .settings-icon {
       float: right;
@@ -65,6 +76,32 @@
     .hidden {
       display: none;
     }
+    .button-group {
+      margin: 10px 0;
+    }
+    .warning {
+      background-color: #fff3cd;
+      border: 1px solid #ffc107;
+      border-radius: 4px;
+      padding: 8px;
+      margin: 10px 0;
+      font-size: 12px;
+    }
+    .tip {
+      background-color: #d1ecf1;
+      border: 1px solid #17a2b8;
+      border-radius: 4px;
+      padding: 8px;
+      margin: 10px 0;
+      font-size: 12px;
+    }
+    .section-title {
+      font-weight: bold;
+      margin-top: 15px;
+      margin-bottom: 5px;
+      font-size: 13px;
+      color: #333;
+    }
   </style>
 </head>
 <body>
@@ -74,20 +111,44 @@
     <input type="text" id="filename" placeholder="video.mp4">
     
     <button id="detect-video" class="button">Detect Video</button>
-    <button id="copy-command" class="button" disabled>Copy FFmpeg Command</button>
     
     <div id="video-info" class="hidden">
-      <p>Video detected! Ready to download.</p>
+      <p>✓ Video detected! Ready to download.</p>
+      
+      <div class="warning">
+        <strong>⚠️ Quality Note:</strong> SharePoint videos contain multiple quality streams. The basic FFmpeg command may download the lowest quality. Use "Best Quality" or "Manual Selection" for higher quality.
+      </div>
+      
+      <div class="section-title">Quick Options:</div>
+      <div class="button-group">
+        <button id="copy-manifest-url" class="button button-secondary button-small">Copy Manifest URL</button>
+        <button id="copy-ffprobe" class="button button-secondary button-small">Copy ffprobe Command</button>
+      </div>
+      
+      <div class="section-title">Download Commands:</div>
+      <div class="button-group">
+        <button id="copy-command" class="button">Generate FFmpeg Command</button>
+        <button id="copy-best-quality" class="button button-success">Best Quality Command</button>
+      </div>
+      
       <div id="command-section" class="hidden">
         <p>Run this command in your terminal:</p>
         <div class="code-block" id="ffmpeg-command"></div>
         <button id="copy-to-clipboard" class="button">Copy to Clipboard</button>
       </div>
+      
+      <div class="tip" id="manual-tip" style="display:none;">
+        <strong>💡 Manual Quality Selection:</strong><br>
+        1. Run the ffprobe command to see available streams<br>
+        2. Note the index of best video &amp; audio streams<br>
+        3. Use: <code>ffmpeg -i "URL" -map 0:X -map 0:Y -c copy output.mp4</code><br>
+        (Replace X and Y with your chosen stream indices)
+      </div>
     </div>
     
     <div id="status" class="status"></div>
     
-    <p class="settings-icon" id="show-settings">Settings</p>
+    <p class="settings-icon" id="show-settings">⚙️ Settings</p>
   </div>
   
   <div id="settings-panel" class="settings-panel hidden">
