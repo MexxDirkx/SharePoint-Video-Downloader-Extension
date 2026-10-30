@@ -114,12 +114,12 @@
     return items.reduce((best, item) => (compare(item, best) > 0 ? item : best));
   }
 
-  // Find the best video and audio Representation in a parsed DASH manifest and their ffmpeg
-  // stream specifiers. ffmpeg's DASH demuxer creates one stream per Representation: all video
+  // The video and audio Representations of a parsed DASH manifest, each list in ffmpeg's
+  // stream order. ffmpeg's DASH demuxer creates one stream per Representation: all video
   // Representations first, then all audio ones, each in manifest order. So the n-th video
   // Representation is "0:v:n" whatever order the AdaptationSets are in.
   // Returns null when the manifest is not something we can map reliably.
-  function selectBestStreams(doc) {
+  function representationsByType(doc) {
     const mpd = doc && doc.documentElement;
     if (!mpd || mpd.localName !== 'MPD') return null;
     // With several Periods ffmpeg picks one by duration; SharePoint manifests have one.
@@ -140,20 +140,40 @@
           id: representation.getAttribute('id') || '',
           bandwidth: numberAttribute(representation, adaptationSet, 'bandwidth'),
           width: numberAttribute(representation, adaptationSet, 'width'),
-          height: numberAttribute(representation, adaptationSet, 'height')
+          height: numberAttribute(representation, adaptationSet, 'height'),
+          element: representation,
+          adaptationSet: adaptationSet
         });
       }
     }
-    if (!videos.length) return null;
+    return { videos, audios };
+  }
 
-    const video = highest(videos, (a, b) =>
-      a.width * a.height - b.width * b.height || a.bandwidth - b.bandwidth);
-    const audio = audios.length ? highest(audios, (a, b) => a.bandwidth - b.bandwidth) : null;
+  // Highest resolution (then bandwidth) for video, highest bandwidth for audio.
+  function bestRepresentation(list, type) {
+    if (!list.length) return null;
+    return type === 'video' ?
+      highest(list, (a, b) => a.width * a.height - b.width * b.height || a.bandwidth - b.bandwidth) :
+      highest(list, (a, b) => a.bandwidth - b.bandwidth);
+  }
+
+  // Find the best video and audio Representation and their ffmpeg stream specifiers.
+  function selectBestStreams(doc) {
+    const representations = representationsByType(doc);
+    if (!representations || !representations.videos.length) return null;
+    const describe = (rep, letter) => rep && {
+      specifier: '0:' + letter + ':' + rep.index,
+      index: rep.index,
+      id: rep.id,
+      bandwidth: rep.bandwidth,
+      width: rep.width,
+      height: rep.height
+    };
     return {
-      video: Object.assign({ specifier: '0:v:' + video.index }, video),
-      audio: audio && Object.assign({ specifier: '0:a:' + audio.index }, audio),
-      videoCount: videos.length,
-      audioCount: audios.length
+      video: describe(bestRepresentation(representations.videos, 'video'), 'v'),
+      audio: describe(bestRepresentation(representations.audios, 'audio'), 'a'),
+      videoCount: representations.videos.length,
+      audioCount: representations.audios.length
     };
   }
 
@@ -217,6 +237,8 @@
     formatProgram,
     joinPath,
     ffprobePathFor,
+    representationsByType,
+    bestRepresentation,
     selectBestStreams,
     streamsFromManifest,
     buildCommands
