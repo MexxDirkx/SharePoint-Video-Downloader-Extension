@@ -85,14 +85,107 @@
     return ffmpegPath.replace(/ffmpeg(\.exe)?$/i, (match, ext) => 'ffprobe' + (ext || ''));
   }
 
+  function childElements(element, name) {
+    return Array.prototype.filter.call(element.childNodes,
+      node => node.nodeType === 1 && node.localName === name);
+  }
+
+  // Media type of an MPD element, decided the way ffmpeg's DASH demuxer does it: by
+  // "video", "audio" or "text" in contentType, overridden by a match in mimeType.
+  function mediaType(element) {
+    if (!element) return null;
+    let type = null;
+    for (const attribute of ['contentType', 'mimeType']) {
+      const value = (element.getAttribute(attribute) || '').toLowerCase();
+      if (value.includes('video')) type = 'video';
+      else if (value.includes('audio')) type = 'audio';
+      else if (value.includes('text')) type = 'text';
+    }
+    return type;
+  }
+
+  // Attributes like width or bandwidth may sit on the Representation or its AdaptationSet.
+  function numberAttribute(representation, adaptationSet, name) {
+    const value = representation.getAttribute(name) || adaptationSet.getAttribute(name);
+    return parseInt(value, 10) || 0;
+  }
+
+  function highest(items, compare) {
+    return items.reduce((best, item) => (compare(item, best) > 0 ? item : best));
+  }
+
+  // Find the best video and audio Representation in a parsed DASH manifest and their ffmpeg
+  // stream specifiers. ffmpeg's DASH demuxer creates one stream per Representation: all video
+  // Representations first, then all audio ones, each in manifest order. So the n-th video
+  // Representation is "0:v:n" whatever order the AdaptationSets are in.
+  // Returns null when the manifest is not something we can map reliably.
+  function selectBestStreams(doc) {
+    const mpd = doc && doc.documentElement;
+    if (!mpd || mpd.localName !== 'MPD') return null;
+    // With several Periods ffmpeg picks one by duration; SharePoint manifests have one.
+    const periods = childElements(mpd, 'Period');
+    if (periods.length !== 1) return null;
+
+    const videos = [];
+    const audios = [];
+    for (const adaptationSet of childElements(periods[0], 'AdaptationSet')) {
+      const contentComponent = childElements(adaptationSet, 'ContentComponent')[0];
+      for (const representation of childElements(adaptationSet, 'Representation')) {
+        const type = mediaType(representation) || mediaType(contentComponent) ||
+          mediaType(adaptationSet);
+        const list = type === 'video' ? videos : type === 'audio' ? audios : null;
+        if (!list) continue;
+        list.push({
+          index: list.length,
+          id: representation.getAttribute('id') || '',
+          bandwidth: numberAttribute(representation, adaptationSet, 'bandwidth'),
+          width: numberAttribute(representation, adaptationSet, 'width'),
+          height: numberAttribute(representation, adaptationSet, 'height')
+        });
+      }
+    }
+    if (!videos.length) return null;
+
+    const video = highest(videos, (a, b) =>
+      a.width * a.height - b.width * b.height || a.bandwidth - b.bandwidth);
+    const audio = audios.length ? highest(audios, (a, b) => a.bandwidth - b.bandwidth) : null;
+    return {
+      video: Object.assign({ specifier: '0:v:' + video.index }, video),
+      audio: audio && Object.assign({ specifier: '0:a:' + audio.index }, audio),
+      videoCount: videos.length,
+      audioCount: audios.length
+    };
+  }
+
+  // Parse manifest text with the given DOMParser and select the best streams.
+  function streamsFromManifest(text, domParser) {
+    let doc;
+    try {
+      doc = domParser.parseFromString(text, 'application/xml');
+    } catch (e) {
+      return null;
+    }
+    if (!doc || doc.getElementsByTagName('parsererror').length) return null;
+    return selectBestStreams(doc);
+  }
+
   // Build every command the popup offers from the trimmed manifest URL.
   //   options: { filename, ffmpegPath, ytdlpPath, downloadFolder, cookiesBrowser, shell }
-  function buildCommands(url, options) {
+  //   streams: result of selectBestStreams(), or null if the manifest could not be read
+  function buildCommands(url, options, streams) {
     const shell = options.shell;
     const command = (program, args) =>
       [formatProgram(program, shell)].concat(args.map(arg => quoteArg(arg, shell))).join(' ');
     const ffmpeg = options.ffmpegPath || 'ffmpeg';
     const output = joinPath(options.downloadFolder, options.filename, shell);
+
+    // Without -map ffmpeg picks the highest-resolution video, but for audio the first stream
+    // with the most channels, which on SharePoint is the lowest bitrate.
+    const bestMaps = [];
+    if (streams) {
+      bestMaps.push('-map', streams.video.specifier);
+      if (streams.audio) bestMaps.push('-map', streams.audio.specifier);
+    }
 
     const ytdlpArgs = [];
     if (options.cookiesBrowser && options.cookiesBrowser !== 'none') {
@@ -108,7 +201,7 @@
 
     return {
       ffmpeg: command(ffmpeg, ['-i', url, '-c', 'copy', output]),
-      ffmpegBest: command(ffmpeg, ['-i', url, '-map', '0:v:0', '-map', '0:a:0', '-c', 'copy', output]),
+      ffmpegBest: command(ffmpeg, ['-i', url].concat(bestMaps, ['-c', 'copy', output])),
       ffprobe: command(ffprobePathFor(options.ffmpegPath), ['-i', url, '-show_streams']),
       ytdlp: command(options.ytdlpPath || 'yt-dlp', ytdlpArgs)
     };
@@ -124,6 +217,8 @@
     formatProgram,
     joinPath,
     ffprobePathFor,
+    selectBestStreams,
+    streamsFromManifest,
     buildCommands
   };
 

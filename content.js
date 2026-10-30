@@ -107,3 +107,20 @@ chrome.runtime.onMessage.addListener(function(request, sender, sendResponse) {
         sendResponse({ transcript: null });
     }
 });
+
+
+// Fetch the DASH manifest for the popup, which reads it to find the best quality streams.
+// Fetching from the page makes the request under the page's origin, as the player does.
+// No cookies are sent, so the request matches what ffmpeg does with the same URL.
+chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
+    if (request.action === "fetchManifest") {
+        fetch(request.url, { credentials: 'omit' })
+            .then(response => {
+                if (!response.ok) throw new Error('HTTP ' + response.status);
+                return response.text();
+            })
+            .then(text => sendResponse({ manifest: text }))
+            .catch(error => sendResponse({ error: error.message }));
+        return true;
+    }
+});

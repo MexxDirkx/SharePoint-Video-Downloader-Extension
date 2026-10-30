@@ -34,6 +34,8 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 
     let videoUrl = null;
+    // Resolves to {streams, error} once the manifest of the detected video has been read
+    let streamsPromise = null;
     let statusTimer = null;
 
     shellSelect.options[0].textContent = 'Auto-detect (' + VideoCommands.SHELLS[detectedShell] + ')';
@@ -80,6 +82,8 @@ document.addEventListener('DOMContentLoaded', function() {
         chrome.tabs.sendMessage(tabs[0].id, {action: "detectVideo"}, function(response) {
           if(response && response.videoManifestUrl) {
             videoUrl = VideoCommands.trimManifestUrl(response.videoManifestUrl);
+            // Read the stream list now so "Best Quality" is ready when clicked
+            streamsPromise = loadStreams(tabs[0].id, videoUrl);
             videoInfo.classList.remove('hidden');
 
             // Get the title of the current tab's page
@@ -98,15 +102,20 @@ document.addEventListener('DOMContentLoaded', function() {
     copyCommandButton.addEventListener('click', function() {
       if(!requireVideo()) return;
       withCommands(function(commands, shellName) {
-        showCommand(commands.ffmpeg, formattedFor(shellName));
+        showCommand(commands.ffmpeg, 'ffmpeg chooses the streams: the highest resolution video, but not necessarily the best audio. ' +
+          formattedFor(shellName));
       });
     });
 
     // Generate best quality FFmpeg command
     copyBestQualityButton.addEventListener('click', function() {
       if(!requireVideo()) return;
-      withCommands(function(commands, shellName) {
-        showCommand(commands.ffmpegBest, formattedFor(shellName));
+      showStatus('Reading the list of streams...', true, 0);
+      streamsPromise.then(function(result) {
+        withCommands(function(commands, shellName) {
+          showStatus('', true);
+          showCommand(commands.ffmpegBest, describeSelection(result) + ' ' + formattedFor(shellName));
+        }, result.streams);
       });
     });
 
@@ -171,8 +180,25 @@ document.addEventListener('DOMContentLoaded', function() {
       manualTip.style.display = 'none';
     }
 
-    // Build all commands for the detected video with the saved settings
-    function withCommands(callback) {
+    // Ask the content script to fetch the manifest, then pick the best streams from it
+    function loadStreams(tabId, url) {
+      return new Promise(function(resolve) {
+        chrome.tabs.sendMessage(tabId, {action: 'fetchManifest', url: url}, function(response) {
+          if(chrome.runtime.lastError || !response) {
+            resolve({streams: null, error: 'the page did not respond'});
+          } else if(response.error) {
+            resolve({streams: null, error: response.error});
+          } else {
+            const streams = VideoCommands.streamsFromManifest(response.manifest, new DOMParser());
+            resolve({streams: streams, error: streams ? null : 'unexpected manifest format'});
+          }
+        });
+      });
+    }
+
+    // Build all commands for the detected video with the saved settings. streams are the
+    // best streams found in the manifest, used by the Best Quality command.
+    function withCommands(callback, streams) {
       chrome.storage.local.get(SETTINGS, function(result) {
         const shell = result.shell && result.shell !== 'auto' ? result.shell : detectedShell;
         const cookiesBrowser = result.cookiesBrowser && result.cookiesBrowser !== 'auto' ?
@@ -184,9 +210,28 @@ document.addEventListener('DOMContentLoaded', function() {
           downloadFolder: result.downloadFolder,
           shell: shell,
           cookiesBrowser: cookiesBrowser
-        });
+        }, streams || null);
         callback(commands, VideoCommands.SHELLS[shell]);
       });
+    }
+
+    function describeSelection(result) {
+      if(!result.streams) {
+        return 'Could not read the list of streams (' + result.error + '), so ffmpeg chooses: ' +
+          'the highest resolution video, but not necessarily the best audio. ' +
+          'Try the yt-dlp command, or ffprobe to choose streams yourself.';
+      }
+      const streams = result.streams;
+      return 'Picks video ' + describeStream(streams.video) + ' (best of ' + streams.videoCount + ')' +
+        (streams.audio ? ' and audio ' + describeStream(streams.audio) + ' (best of ' + streams.audioCount + ').' :
+          '. No separate audio stream was found.');
+    }
+
+    function describeStream(stream) {
+      const parts = [];
+      if(stream.width && stream.height) parts.push(stream.width + 'x' + stream.height);
+      if(stream.bandwidth) parts.push(Math.round(stream.bandwidth / 1000) + ' kbps');
+      return parts.join(', ') || stream.specifier;
     }
 
     function formattedFor(shellName) {
