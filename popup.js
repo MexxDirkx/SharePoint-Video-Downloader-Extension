@@ -248,6 +248,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
 
   const downloadTranscriptButton = document.getElementById('download-transcript');
+const statusDiv = document.getElementById('status');
 let transcriptData = null;
 
 // Detect transcript from content script
