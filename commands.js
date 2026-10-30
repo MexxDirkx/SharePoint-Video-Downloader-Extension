@@ -15,10 +15,11 @@
   }
 
   // Turn a page title into an .mp4 filename. Besides the characters Windows forbids, this
-  // replaces "%" (expanded by cmd.exe and by yt-dlp's output template) and control characters.
+  // replaces "%" (expanded by cmd.exe and by yt-dlp's output template), "!" and "^" (special in
+  // cmd.exe with delayed expansion) and control characters.
   function sanitizeFilename(filename) {
     if (!filename) return '';
-    let sanitized = filename.trim().replace(/[\u0000-\u001f<>:"/\\|?*%]/g, '_');
+    let sanitized = filename.trim().replace(/[\u0000-\u001f<>:"/\\|?*%!^]/g, '_');
     if (!sanitized) return '';
     if (!sanitized.toLowerCase().endsWith('.mp4')) {
       sanitized += '.mp4';
@@ -79,8 +80,13 @@
   //   powershell: single quotes, quote characters doubled. PowerShell also treats the
   //               typographic quotes U+2018..U+201B as single quotes. Windows PowerShell 5.1
   //               splits a bare "-x.y" in two and drops "--%" even when quoted.
-  //   cmd:        double quotes, the only quoting cmd.exe has; cmd still expands %NAME%
-  //               inside them, so the only % allowed is a URL's %XX escape.
+  //   cmd:        double quotes, the only quoting cmd.exe has. cmd still expands %NAME%
+  //               inside them, so a % must be followed by two hex digits as in a URL's %XX
+  //               escapes. That doesn't stop all expansion: "%3A%" or "%CD%" still name
+  //               variables, and defined ones (CD, DATE) are replaced, but only inside the
+  //               quoted argument, since expansion happens before cmd splits the line.
+  //               With delayed expansion on (cmd /v:on, or DelayedExpansion in the registry)
+  //               cmd also expands !NAME!; see commandLine.
   // On Windows the program splits its command line itself, where " and a backslash before
   // the closing quote are special; Windows PowerShell 5.1 passes an embedded " through
   // as is. URLs, tokens and sanitized filenames contain neither, so such values are refused.
@@ -95,7 +101,7 @@
     if (/^[A-Za-z0-9_.\/:\\-]+$/.test(arg) && !dashDot) return arg;
     if (arg.includes('"') || arg.endsWith('\\')) throw unsafe(shell);
     if (shell === 'cmd') {
-      if (/%(?![0-9A-Fa-f]{2})/.test(arg)) throw unsafe(shell);
+      if (/%(?![0-9A-Fa-f]{2})/.test(arg) || (arg.match(/!/g) || []).length > 1) throw unsafe(shell);
       return '"' + arg + '"';
     }
     if (arg === '--%') throw unsafe(shell);
@@ -225,8 +231,14 @@
     return selectBestStreams(doc);
   }
 
+  // With delayed expansion on, cmd expands !NAME! anywhere on the line, also across
+  // arguments, and then treats ^ as an escape character. A SharePoint URL has one "!" (in
+  // "b!"), so a cmd line may have at most one, and no ^ next to it.
   function commandLine(program, args, shell) {
-    return [formatProgram(program, shell)].concat(args.map(arg => quoteArg(arg, shell))).join(' ');
+    const line = [formatProgram(program, shell)].concat(args.map(arg => quoteArg(arg, shell))).join(' ');
+    const bangs = (line.match(/!/g) || []).length;
+    if (shell === 'cmd' && (bangs > 1 || (bangs && line.includes('^')))) throw unsafe(shell);
+    return line;
   }
 
   // Build every command the popup offers from the trimmed manifest URL.
