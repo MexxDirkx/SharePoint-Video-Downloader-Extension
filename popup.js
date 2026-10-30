@@ -2,6 +2,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const detectButton = document.getElementById('detect-video');
     const copyCommandButton = document.getElementById('copy-command');
     const copyBestQualityButton = document.getElementById('copy-best-quality');
+    const copyYtdlpButton = document.getElementById('copy-ytdlp-command');
     const copyManifestUrlButton = document.getElementById('copy-manifest-url');
     const copyFfprobeButton = document.getElementById('copy-ffprobe');
     const filenameInput = document.getElementById('filename');
@@ -15,6 +16,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const mainPanel = document.getElementById('main-panel');
     const saveSettingsBtn = document.getElementById('save-settings');
     const backToMainBtn = document.getElementById('back-to-main');
+    const ytdlpPathInput = document.getElementById('yt-dlp-path');
     const ffmpegPathInput = document.getElementById('ffmpeg-path');
     const downloadFolderInput = document.getElementById('download-folder');
     const manualTip = document.getElementById('manual-tip');
@@ -22,7 +24,8 @@ document.addEventListener('DOMContentLoaded', function() {
     let videoUrl = null;
   
     // Load saved settings
-    chrome.storage.local.get(['ffmpegPath', 'downloadFolder'], function(result) {
+    chrome.storage.local.get(['ytdlpPath', 'ffmpegPath', 'downloadFolder'], function(result) {
+      if(result.ytdlpPath) ytdlpPathInput.value = result.ytdlpPath;
       if(result.ffmpegPath) ffmpegPathInput.value = result.ffmpegPath;
       if(result.downloadFolder) downloadFolderInput.value = result.downloadFolder;
     });
@@ -40,6 +43,7 @@ document.addEventListener('DOMContentLoaded', function() {
   
     saveSettingsBtn.addEventListener('click', function() {
       chrome.storage.local.set({
+        ytdlpPath: ytdlpPathInput.value,
         ffmpegPath: ffmpegPathInput.value,
         downloadFolder: downloadFolderInput.value
       }, function() {
@@ -122,6 +126,31 @@ document.addEventListener('DOMContentLoaded', function() {
       // -map 0:v:0 selects first video variant, -map 0:a:0 selects first audio variant
       // Using variant streams (v:0, a:0) lets FFmpeg pick the best quality within each type
       const command = `${ffmpegPath} -i "${videoUrl}" -map 0:v:0 -map 0:a:0 -c copy "${outputPath}"`;
+      
+      // Display the command
+      ffmpegCommand.textContent = command;
+      commandSection.classList.remove('hidden');
+      manualTip.style.display = 'none';
+    });
+  });
+
+  
+  // Generate basic yt-dlp command
+  copyYtdlpButton.addEventListener('click', function() {
+    if(!videoUrl) {
+      statusDiv.textContent = 'No video URL detected.';
+      statusDiv.style.backgroundColor = '#f8d7da';
+      return;
+    }
+  
+    chrome.storage.local.get(['ytdlpPath', 'downloadFolder'], function(result) {
+      const filename = sanitizeFilename(filenameInput.value) || 'video.mp4';
+      const ytdlpPath = result.ytdlpPath || 'yt-dlp';
+      const downloadFolder = result.downloadFolder || '.';
+      const outputPath = downloadFolder ? `${downloadFolder}/${filename}` : filename;
+      
+      // Create the command with browser cookies
+      const command = `${ytdlpPath} --cookies-from-browser chrome "${videoUrl}" -o "${outputPath}"`;
       
       // Display the command
       ffmpegCommand.textContent = command;

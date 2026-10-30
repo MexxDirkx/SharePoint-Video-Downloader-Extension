@@ -130,6 +130,7 @@
       <div class="button-group">
         <button id="copy-command" class="button">Generate FFmpeg Command</button>
         <button id="copy-best-quality" class="button button-success">Best Quality Command</button>
+        <button id="copy-ytdlp-command" class="button button-secondary">Generate Yt-dlp Command</button>
       </div>
       
       <div id="command-section" class="hidden">
@@ -153,6 +154,8 @@
   </div>
   
   <div id="settings-panel" class="settings-panel hidden">
+    <p>Path to Yt-dlp:</p>
+    <input type="text" id="yt-dlp-path" placeholder="C:\yt-dlp\yt-dlp.exe">
     <h3>FFmpeg Settings</h3>
     <p>Path to FFmpeg:</p>
     <input type="text" id="ffmpeg-path" placeholder="C:\ffmpeg\bin\ffmpeg.exe">
