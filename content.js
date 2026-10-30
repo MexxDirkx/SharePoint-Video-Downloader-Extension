@@ -272,6 +272,8 @@
     await refreshFromPage();
     const tracks = await videoTracks(await tabState(), signal, status);
     const separate = tracks.length > 1;
+    const noAudio = !tracks.some(track => track.type === 'audio') ?
+      ' No audio track was found, so the file probably has no sound: let the video play a little longer and download again.' : '';
     const names = { video: request.baseName + (separate ? '.video.mp4' : '.mp4'), audio: request.baseName + '.audio.m4a' };
 
     let directory = null;
@@ -283,7 +285,8 @@
         VideoDownloader.blobSink(names[track.type], track.type === 'audio' ? 'audio/mp4' : 'video/mp4');
     }
 
-    const label = tracks.map(t => t.type + (t.height ? ' ' + t.width + 'x' + t.height : '')).join(' and ');
+    const label = tracks.map(t => t.type + (t.height ? ' ' + t.width + 'x' + t.height : '')).join(' and ') +
+      (noAudio ? ' (no audio track found)' : '');
     const files = await VideoDownloader.downloadTracks(tracks, signal, (done, total, note) => {
       panel.progress(done / total);
       status('running', note || 'Downloading ' + label + ': ' + done + ' of ' + total + ' parts...', { done, total });
@@ -303,7 +306,7 @@
     const muxNote = separate ? ' To combine video and audio into one file, run the ffmpeg command below in the folder with the files.' : '';
     return {
       text: (directory ? 'Saved ' + sizes + ' in the folder you chose.' :
-        'Downloaded ' + sizes + '. Use the Save buttons in the panel on the page to store them.') + muxNote,
+        'Downloaded ' + sizes + '. Use the Save buttons in the panel on the page to store them.') + muxNote + noAudio,
       files: summary(files),
       muxCommand: separate && request.muxCommand ? request.muxCommand : null
     };

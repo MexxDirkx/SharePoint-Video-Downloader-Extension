@@ -102,10 +102,17 @@
     };
   }
 
-  function isPlainMp4(buffer) {
-    return buffer.byteLength >= 8 &&
-      String.fromCharCode.apply(null, new Uint8Array(buffer, 4, 4)) === 'ftyp';
+  function boxType(buffer) {
+    return buffer.byteLength >= 8 ? String.fromCharCode.apply(null, new Uint8Array(buffer, 4, 4)) : '';
   }
+
+  function isPlainMp4(buffer) {
+    return boxType(buffer) === 'ftyp';
+  }
+
+  // Boxes an MP4 file or fragmented-MP4 segment can start with. Anything else, such as an
+  // HTML error page served with status 200, is not video.
+  const FIRST_BOXES = ['ftyp', 'styp', 'moof', 'sidx', 'emsg', 'prft', 'moov', 'mdat', 'free', 'skip', 'uuid'];
 
   // Download every track: [{ type, initUrl, segments, requestInit, encryption, key, iv, sink }].
   // encryption: 'always' (decrypt every part with key/iv), 'detect' (decrypt only if the
@@ -135,9 +142,18 @@
       if (job.index === 0 && track.encryption === 'detect') {
         track.encryption = isPlainMp4(buffer) ? 'none' : 'always';
       }
+      const part = 'Part ' + (job.index + 1) + ' of the ' + track.type;
       if (track.encryption === 'always') {
         if (!track.key) throw new Error('The ' + track.type + ' is encrypted and no decryption key was found');
-        buffer = await crypto.subtle.decrypt({ name: 'AES-CBC', iv: track.iv }, track.key, buffer);
+        try {
+          buffer = await crypto.subtle.decrypt({ name: 'AES-CBC', iv: track.iv }, track.key, buffer);
+        } catch (e) {
+          throw new Error(part + ' could not be decrypted: the key doesn\'t match. Reload the page, play the video and try again.');
+        }
+      }
+      if (!FIRST_BOXES.includes(boxType(buffer))) {
+        throw new Error(part + ' is not video data' + (track.encryption === 'always' ?
+          ' after decryption (wrong key?)' : ' (the server sent something else, such as an error page)') + '.');
       }
       if (signal.aborted) throw cancelled();
       await track.sink.put(job.index, buffer);

@@ -152,6 +152,8 @@ document.addEventListener('DOMContentLoaded', function() {
           'pages opened before the extension was installed or updated need a reload.';
       } else if(video && video.kind === 'transcode' && !video.hasKey) {
         pageStatus.textContent = 'Video found. Let it play a few more seconds so the extension can get its decryption key.';
+      } else if(video && video.kind === 'transcode' && !video.hasAudio) {
+        pageStatus.textContent = 'Video found, but not its audio track yet. Let it play a few more seconds, or the download will have no sound.';
       } else if(video) {
         pageStatus.textContent = 'Video found. Download Video saves the best quality in your browser.';
       } else {

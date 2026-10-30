@@ -62,6 +62,17 @@
       (match, name, width) => name ? String(values[name]).padStart(width ? +width : 0, '0') : '$');
   }
 
+  // Number of segments of `duration` (timescale units) in `seconds`: a whole number when
+  // the ratio is one up to floating-point error, since one segment too many fails the
+  // download (one past the end doesn't exist).
+  function segmentCount(seconds, timescale, duration) {
+    return wholeOrCeil(seconds * timescale / duration);
+  }
+
+  function wholeOrCeil(ratio) {
+    return Math.abs(ratio - Math.round(ratio)) < 1e-6 ? Math.round(ratio) : Math.ceil(ratio);
+  }
+
   function httpsUrl(url, base) {
     const resolved = new URL(url, base);
     if (resolved.protocol !== 'https:') throw new Error('Unexpected URL in manifest: ' + resolved.href);
@@ -141,14 +152,17 @@
       if (template.timeline) {
         let time = 0;
         let number = startNumber;
-        const end = periodSeconds * timescale;
         for (const s of childElements(template.timeline, 'S')) {
           if (s.getAttribute('t') !== null) time = parseInt(s.getAttribute('t'), 10);
           const duration = parseInt(s.getAttribute('d') || '0', 10);
-          const repeat = parseInt(s.getAttribute('r') || '0', 10);
+          let repeat = parseInt(s.getAttribute('r') || '0', 10);
           if (!(duration > 0)) continue;
-          // r="-1" repeats until the end of the Period
-          for (let i = 0; repeat < 0 ? time < end : i <= repeat; i++) {
+          if (repeat < 0) {
+            // r="-1" repeats until the end of the Period
+            if (!(periodSeconds > 0)) throw new Error('Cannot work out the segments of this video (open-ended timeline)');
+            repeat = segmentCount(periodSeconds - time / timescale, timescale, duration) - 1;
+          }
+          for (let i = 0; i <= repeat; i++) {
             segments.push(media(number++, time));
             time += duration;
           }
@@ -156,9 +170,10 @@
       } else {
         const duration = parseInt(attributes.duration || '0', 10);
         if (!(duration > 0) || !(periodSeconds > 0)) throw new Error('Cannot work out the segments of this video');
-        const count = Math.ceil(periodSeconds * timescale / duration);
+        const count = segmentCount(periodSeconds, timescale, duration);
         for (let i = 0; i < count; i++) segments.push(media(startNumber + i, i * duration));
       }
+      if (!segments.length) throw new Error('Cannot work out the segments of this video');
     } else if (levels.some(level => childElements(level, 'SegmentList').length)) {
       throw new Error('This video uses a segment list, which the extension does not support');
     } else {
@@ -230,7 +245,8 @@
     }
     if (track.quality !== quality) return session;
     if (part === 'initsegment') track.initUrl = track.initUrl || url;
-    if (part === 'mediasegment') track.sampleUrl = track.sampleUrl || url;
+    // The sample's segmentTime is what gets replaced to list every segment
+    if (part === 'mediasegment' && query.get('segmentTime') !== null) track.sampleUrl = track.sampleUrl || url;
     for (const key of ['wsd', 'ppd', 'ppst']) {
       if (track[key] == null && query.get(key) != null) track[key] = query.get(key);
     }
@@ -256,8 +272,7 @@
       const track = session.tracks[type];
       const wsd = Number(track.wsd);
       const ppst = Number(track.ppst || 0);
-      const ratio = (Number(track.ppd) - ppst) / wsd;
-      const count = Math.abs(ratio - Math.round(ratio)) < 1e-6 ? Math.round(ratio) : Math.ceil(ratio);
+      const count = wholeOrCeil((Number(track.ppd) - ppst) / wsd);
       const places = Math.max(decimals(track.wsd), decimals(track.ppst || 0));
       const segments = [];
       for (let i = 0; i < count; i++) {
@@ -544,6 +559,7 @@
   const api = {
     manifestProtection,
     parseDuration,
+    segmentCount,
     expandTemplate,
     dashDownloadPlan,
     isTranscodeUrl,
