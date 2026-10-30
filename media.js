@@ -440,6 +440,17 @@
 
   const SHAREPOINT_HOST = /(\.sharepoint\.com|\.sharepoint\.com\.mcas\.ms|\.sharepoint\.us|\.sharepoint-mil\.us)$/i;
 
+  // A manifest capture with a well-formed URL and token, or null.
+  function cleanManifest(manifest) {
+    if (!manifest || !VideoCommands.isManifestUrl(manifest.url)) return null;
+    return Object.assign({}, manifest, { token: VideoCommands.isToken(manifest.token) ? manifest.token : null });
+  }
+
+  // What a content script reported for its frame, with page-supplied values checked again.
+  function cleanFrame(frame) {
+    return Object.assign({}, frame, { manifest: cleanManifest(frame && frame.manifest) });
+  }
+
   function summarizeTab(state) {
     const frames = Object.keys((state && state.frames) || {}).map(id =>
       Object.assign({ frameId: Number(id) }, state.frames[id]));
@@ -449,11 +460,12 @@
     const contextFrame = spFrames.find(frame => frame.fileInfo && frame.fileInfo.spItemUrl) ||
       spFrames.find(frame => frame.fileInfo) || spFrames[0] || null;
 
-    // Newest manifest URL from a frame's fetch hook or from the network
-    const manifests = frames.filter(frame => frame.manifest)
-      .map(frame => Object.assign({ frameId: frame.frameId }, frame.manifest));
-    if (net.manifest) manifests.push(net.manifest);
-    manifests.sort((a, b) => (b.at || 0) - (a.at || 0));
+    // The manifest request the background worker saw on the network; what frames report
+    // (which a page script can fake) only when there is none, newest first.
+    const manifests = frames.map(frame => cleanManifest(frame.manifest) && Object.assign({ frameId: frame.frameId }, cleanManifest(frame.manifest)))
+      .filter(Boolean)
+      .sort((a, b) => (b.at || 0) - (a.at || 0));
+    if (cleanManifest(net.manifest)) manifests.unshift(cleanManifest(net.manifest));
     let manifest = manifests[0] || null;
     if (manifest && !manifest.token) {
       const withToken = manifests.find(m => m.url === manifest.url && m.token);
@@ -511,6 +523,7 @@
     originalFileUrls,
     looksLikeVideo,
     fileBaseName,
+    cleanFrame,
     summarizeTab
   };
 

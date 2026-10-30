@@ -43,8 +43,11 @@
     }, 100);
   }
 
+  // The page can post anything, so only well-formed manifest URLs and tokens are kept.
   function onManifestUrl(url, token) {
     const trimmed = VideoCommands.trimManifestUrl(url);
+    if (!VideoCommands.isManifestUrl(trimmed)) return;
+    if (!VideoCommands.isToken(token)) token = null;
     const previous = captured.manifest;
     if (previous && previous.url === trimmed && (previous.token || !token)) return;
     captured.manifest = { url: trimmed, token: token || null, at: previous && previous.url === trimmed ? previous.at : Date.now() };
@@ -267,7 +270,7 @@
         panel.button('Save ' + file.filename, () => VideoDownloader.saveBlob(file.blob, file.filename));
       }
     }
-    if (separate) {
+    if (separate && request.muxCommand) {
       panel.code(request.muxCommand);
       panel.button('Copy ffmpeg command', () => navigator.clipboard.writeText(request.muxCommand).catch(() => {}), true);
     }
@@ -276,7 +279,7 @@
       text: (directory ? 'Saved ' + sizes + ' in the folder you chose.' :
         'Downloaded ' + sizes + '. Use the Save buttons in the panel on the page to store them.') + muxNote,
       files: summary(files),
-      muxCommand: separate ? request.muxCommand : null
+      muxCommand: separate && request.muxCommand ? request.muxCommand : null
     };
   }
 

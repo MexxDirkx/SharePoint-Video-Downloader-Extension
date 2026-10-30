@@ -174,7 +174,12 @@ document.addEventListener('DOMContentLoaded', function() {
       if(!summary || summary.pageFrameId === null) return;
       readSettings(function(settings) {
         const base = baseName();
-        const muxCommand = VideoCommands.muxCommand(base + '.video.mp4', base + '.audio.m4a', base + '.mp4', settings);
+        let muxCommand = '';
+        try {
+          muxCommand = VideoCommands.muxCommand(base + '.video.mp4', base + '.audio.m4a', base + '.mp4', settings);
+        } catch (e) {
+          // a download folder or ffmpeg path that can't be quoted; the download itself still works
+        }
         sendToFrame(summary.pageFrameId, {
           action: 'downloadVideo',
           baseName: base,
@@ -407,12 +412,20 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Build all commands for the detected video with the saved settings. streams are the
     // best streams found in the manifest, used by the Best Quality command.
+    // buildCommands refuses values it can't quote safely; show why instead of a command.
     function withCommands(callback, streams) {
       readSettings(function(settings) {
-        const commands = VideoCommands.buildCommands(cli.url, Object.assign({
-          filename: VideoCommands.sanitizeFilename(filenameInput.value) || 'video.mp4',
-          token: cli.token
-        }, settings), streams || null);
+        let commands;
+        try {
+          commands = VideoCommands.buildCommands(cli.url, Object.assign({
+            filename: VideoCommands.sanitizeFilename(filenameInput.value) || 'video.mp4',
+            token: cli.token
+          }, settings), streams || null);
+        } catch (e) {
+          commandSection.classList.add('hidden');
+          showStatus('No command: ' + e.message, false, 0);
+          return;
+        }
         callback(commands, VideoCommands.SHELLS[settings.shell]);
       });
     }

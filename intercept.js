@@ -16,6 +16,8 @@
 
   const SOURCE = 'spvd-intercept';
   const SHAREPOINT_HOST = /(\.sharepoint\.com|\.sharepoint\.com\.mcas\.ms|\.sharepoint\.us|\.sharepoint-mil\.us)$/i;
+  // Same checks as VideoCommands.isToken / isManifestUrl (commands.js isn't loaded in the page)
+  const TOKEN = /^(?:[A-Za-z]+ )?[A-Za-z0-9._~+\/=-]+$/;
   const last = {};
 
   function post(kind, data) {
@@ -39,8 +41,10 @@
   // Look at an outgoing request. header(name) returns a request header (lower-case name).
   function onRequest(url, method, header) {
     if (method !== 'GET') return;
-    if (/\/videomanifest$/i.test(url.pathname) && !/tempauth/i.test(url.search)) {
-      post('manifest', { url: url.href, token: header('x-spopactoken') || null });
+    if (url.protocol === 'https:' && /\.svc\.ms$/i.test(url.hostname) && /\/videomanifest$/i.test(url.pathname) &&
+        !url.username && !url.password && !/tempauth/i.test(url.search)) {
+      const token = header('x-spopactoken');
+      post('manifest', { url: url.href, token: token && token.length <= 8192 && TOKEN.test(token) ? token : null });
     }
     if (/\/_api\/v[0-9.]+\//i.test(url.pathname) && SHAREPOINT_HOST.test(url.hostname)) {
       const authorization = header('authorization');

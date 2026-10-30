@@ -45,8 +45,11 @@ function requestHeader(headers, name) {
 
 chrome.webRequest.onSendHeaders.addListener(details => {
   if (details.tabId < 0 || details.method !== 'GET' || /tempauth/i.test(details.url)) return;
-  const url = VideoCommands.trimManifestUrl(details.url);
-  const token = requestHeader(details.requestHeaders, 'x-spopactoken');
+  // Pages can send their own requests here, so accept only what the player would send
+  const url = VideoCommands.trimManifestUrl(new URL(details.url).href);
+  if (!VideoCommands.isManifestUrl(url)) return;
+  let token = requestHeader(details.requestHeaders, 'x-spopactoken');
+  if (!VideoCommands.isToken(token)) token = null;
   update(details.tabId, state => {
     const previous = state.net.manifest;
     if (previous && previous.url === url && (previous.token === token || !token)) return false;
@@ -84,7 +87,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       break;
     case 'capture':
       update(tabId, state => {
-        state.frames[sender.frameId] = message.frame;
+        state.frames[sender.frameId] = VideoMedia.cleanFrame(message.frame);
       });
       break;
     case 'job':

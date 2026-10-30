@@ -48,21 +48,57 @@
     return 'chrome';
   }
 
-  // Quote one argument so the shell passes it to the program unchanged.
+  // The manifest URL and token come from the page, which must not be able to put anything
+  // else into a command. Accept only what SharePoint sends: an https *.svc.ms videomanifest
+  // URL in normalised form, and a token of URL-safe/base64 characters (optionally after a
+  // scheme word such as "Bearer").
+  function isManifestUrl(value) {
+    if (typeof value !== 'string' || value.length > 16384) return false;
+    try {
+      const url = new URL(value);
+      return url.href === value && url.protocol === 'https:' && !url.username && !url.password &&
+        /\.svc\.ms$/i.test(url.hostname) && /\/videomanifest$/i.test(url.pathname);
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function isToken(value) {
+    return typeof value === 'string' && value.length <= 8192 &&
+      /^(?:[A-Za-z]+ )?[A-Za-z0-9._~+\/=-]+$/.test(value);
+  }
+
+  function unsafe(shell) {
+    return new Error('A value in this command contains characters that can\'t be quoted safely for ' + SHELLS[shell] + '.');
+  }
+
+  // Quote one argument so the shell passes it to the program unchanged, or throw when that
+  // can't be guaranteed. Control characters (a line break ends the command) are never allowed.
   //   posix:      single quotes, ' becomes '\''. Double quotes are not safe: bash and zsh
   //               expand "!" in them, and SharePoint drive ids in the URL start with "b!".
   //   powershell: single quotes, quote characters doubled. PowerShell also treats the
-  //               typographic quotes U+2018..U+201B as single quotes.
-  //   cmd:        double quotes, the only quoting cmd.exe has. URLs and sanitized
-  //               filenames never contain a double quote.
+  //               typographic quotes U+2018..U+201B as single quotes. Windows PowerShell 5.1
+  //               splits a bare "-x.y" in two and drops "--%" even when quoted.
+  //   cmd:        double quotes, the only quoting cmd.exe has; cmd still expands %NAME%
+  //               inside them, so the only % allowed is a URL's %XX escape.
+  // On Windows the program splits its command line itself, where " and a backslash before
+  // the closing quote are special; Windows PowerShell 5.1 passes an embedded " through
+  // as is. URLs, tokens and sanitized filenames contain neither, so such values are refused.
   function quoteArg(arg, shell) {
     arg = String(arg);
+    if (/[\u0000-\u001f\u007f]/.test(arg)) throw unsafe(shell);
     if (shell === 'posix') {
       if (/^[A-Za-z0-9_.\/:-]+$/.test(arg)) return arg;
       return "'" + arg.replace(/'/g, "'\\''") + "'";
     }
-    if (/^[A-Za-z0-9_.\/:\\-]+$/.test(arg)) return arg;
-    if (shell === 'cmd') return '"' + arg.replace(/"/g, '') + '"';
+    const dashDot = shell === 'powershell' && /^-.*[.\/\\]/.test(arg);
+    if (/^[A-Za-z0-9_.\/:\\-]+$/.test(arg) && !dashDot) return arg;
+    if (arg.includes('"') || arg.endsWith('\\')) throw unsafe(shell);
+    if (shell === 'cmd') {
+      if (/%(?![0-9A-Fa-f]{2})/.test(arg)) throw unsafe(shell);
+      return '"' + arg + '"';
+    }
+    if (arg === '--%') throw unsafe(shell);
     return "'" + arg.replace(/['\u2018-\u201b]/g, '$&$&') + "'";
   }
 
@@ -198,6 +234,8 @@
   //   streams: result of selectBestStreams(), or null if the manifest could not be read
   // token is the player's X-SPOPacToken; the media service answers 401 without it.
   function buildCommands(url, options, streams) {
+    if (!isManifestUrl(url)) throw new Error('Not a SharePoint video manifest URL.');
+    if (options.token && !isToken(options.token)) throw new Error('The access token has unexpected characters.');
     const shell = options.shell;
     const command = (program, args) => commandLine(program, args, shell);
     const ffmpeg = options.ffmpegPath || 'ffmpeg';
@@ -246,6 +284,8 @@
   const api = {
     SHELLS,
     trimManifestUrl,
+    isManifestUrl,
+    isToken,
     sanitizeFilename,
     detectShell,
     detectBrowser,
