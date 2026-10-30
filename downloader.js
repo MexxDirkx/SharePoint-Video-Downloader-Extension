@@ -285,7 +285,7 @@
     if (old) old.remove();
     const host = document.createElement('div');
     host.id = 'spvd-panel';
-    const shadow = host.attachShadow({ mode: 'open' });
+    const shadow = host.attachShadow({ mode: 'closed' });
     try {
       const sheet = new CSSStyleSheet();
       sheet.replaceSync(PANEL_CSS);
