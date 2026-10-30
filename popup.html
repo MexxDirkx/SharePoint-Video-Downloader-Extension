@@ -195,7 +195,7 @@
           <strong>💡 Manual Quality Selection:</strong><br>
           1. Run the ffprobe command to see available streams<br>
           2. Note the index of best video &amp; audio streams<br>
-          3. Use: <code>ffmpeg -i "URL" -map 0:X -map 0:Y -c copy output.mp4</code><br>
+          3. Use: <code>ffmpeg -headers 'X-SPOPacToken: TOKEN' -i 'URL' -map 0:X -map 0:Y -c copy output.mp4</code>, with the token, URL and quoting of the ffprobe command<br>
           (Replace X and Y with your chosen stream indices)
         </div>
       </div>

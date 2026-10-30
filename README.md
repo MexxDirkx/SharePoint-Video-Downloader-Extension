@@ -54,9 +54,11 @@ The extension is not in the Chrome Web Store or Edge Add-ons store, so you load 
 
 **Updating:** replace the files in the folder with the new version (or run `git pull`), click the reload button on the extension's card on the extensions page, and reload your SharePoint and Teams tabs.
 
-### Firefox (untested)
+**About the permissions:** the extension's details page says it can "read and change your data" on SharePoint, `svc.ms` (Microsoft's media service) and Teams. It needs that to see the video player's requests on those sites and to download the video with your sign-in. Apart from the download panel it adds, it doesn't change the pages, and it sends nothing to any other site.
 
-The extension is made for Chromium-based browsers and has not been tested in Firefox. To try it: open `about:debugging#/runtime/this-firefox`, click **Load Temporary Add-on** and select `manifest.json`. Firefox removes temporary add-ons when it restarts.
+### Firefox
+
+Firefox is not supported. The extension uses Chrome features that Firefox doesn't have: a background service worker and the request headers it reads with `webRequest` (`extraHeaders`).
 
 ## Usage
 
@@ -71,7 +73,7 @@ The extension is made for Chromium-based browsers and has not been tested in Fir
    ```
    Both files also play on their own, for example in VLC.
 
-For long videos, choose **Settings → Save downloaded videos → Write straight to a folder I choose**. The panel then asks for a folder and writes the files there while downloading, instead of keeping them in the browser until you click Save. This works when the video page is open on its own, not when it's embedded in Teams.
+For long videos, choose **Settings → Save downloaded videos → Write straight to a folder I choose**. The panel then asks for a folder and writes the files there while downloading, instead of keeping them in the browser until you click Save. This works when the video page is open on its own, not when it's embedded in Teams. Files that are already in the folder are kept; new ones get a number, like `Name (1).video.mp4`.
 
 ### Transcripts
 
@@ -86,7 +88,7 @@ The commands include a temporary access token (the `X-SPOPacToken` header), so r
 - **Best Quality Command**: ffmpeg with the highest resolution video and highest bitrate audio. The note under the command shows what was picked.
 - **Generate yt-dlp Command**: yt-dlp picks the best video and audio by itself and merges them.
 - **Generate FFmpeg Command**: lets ffmpeg choose the streams, which can give the lowest bitrate audio.
-- **Copy ffprobe Command** / **Copy Manifest URL**: to choose streams yourself. ffprobe lists them as `Stream #0:3: Video: h264 ..., 1920x1080`; pass the numbers to ffmpeg with `-map 0:3 -map 0:5`.
+- **Copy ffprobe Command** / **Copy Manifest URL**: to choose streams yourself. ffprobe lists them as `Stream #0:3: Video: h264 ..., 1920x1080`. Then run ffmpeg with the same `-headers` and `-i` parts as the ffprobe command, quoted the same way, and the stream numbers you want: `ffmpeg -headers 'X-SPOPacToken: <token>' -i '<manifest URL>' -map 0:3 -map 0:5 -c copy output.mp4`.
 
 ## Settings
 
@@ -118,12 +120,15 @@ The commands include a temporary access token (the `X-SPOPacToken` header), so r
 - **The browser asks whether the site may download multiple files**: allow it. Each Save button is a separate download.
 - **Save does nothing in Teams**: open the recording in SharePoint or OneDrive (*Open in browser*) and download it there.
 - **The browser runs out of memory on a very long video**: use *Write straight to a folder I choose* in Settings.
+- **"No audio track was found"** or the file has no sound: the player hadn't fetched the audio yet. Let the video play a little longer and download again.
+- **"Part ... is not video data"** or **"could not be decrypted"**: SharePoint sent an error page instead of video, or the key no longer matches. Reload the page, play the video for a few seconds and try again.
 
 ### Command-line tools
 
 - **`ffmpeg` / `yt-dlp` is not recognized, or "command not found"**: the program isn't installed or isn't on your PATH. Open a new terminal after installing, or enter the full path in Settings.
 - **`Server returned 401 Unauthorized`**: the command has no access token or the token expired. Commands from older versions of this extension lack the token. Generate the command again.
 - **ffmpeg says `Error when loading first fragment` or `Invalid data`, or yt-dlp says the video is `DRM protected`**: the video is encrypted, or its parts are only served to your signed-in browser. Use **Download Video** instead.
+- **"No command: ... can't be quoted safely for Command Prompt"** (or PowerShell): the download folder or program path contains characters that terminal would interpret, such as `%` or `"` for Command Prompt. Choose another folder, or another terminal under **Format commands for**.
 - **bash says `event not found`, or Command Prompt says `'inputFormat' is not recognized as an internal or external command`**: the command was formatted for a different terminal. Choose yours under **Format commands for** in Settings.
 
 ## How it works

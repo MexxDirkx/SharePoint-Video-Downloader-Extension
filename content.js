@@ -4,6 +4,10 @@
 //    about the video, its transcript and the file, and reports it to background.js.
 //  - Handles the popup's requests: read the manifest, download the transcript, download the
 //    video. Downloads run here, in the page, so they continue when the popup closes.
+//
+// The transcript lookup and the wait for the audio track follow ms-teams-sharepoint-downloader
+// by Brendan Gooden (https://github.com/brendangooden/ms-teams-sharepoint-downloader),
+// MIT License, Copyright (c) 2025 Brendan Gooden. See THIRD_PARTY_NOTICES.md.
 (function () {
   'use strict';
 
