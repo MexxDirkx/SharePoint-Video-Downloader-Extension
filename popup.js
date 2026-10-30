@@ -9,6 +9,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const videoInfo = document.getElementById('video-info');
     const commandSection = document.getElementById('command-section');
     const ffmpegCommand = document.getElementById('ffmpeg-command');
+    const commandNote = document.getElementById('command-note');
     const copyToClipboard = document.getElementById('copy-to-clipboard');
     const statusDiv = document.getElementById('status');
     const showSettingsBtn = document.getElementById('show-settings');
@@ -19,217 +20,177 @@ document.addEventListener('DOMContentLoaded', function() {
     const ytdlpPathInput = document.getElementById('yt-dlp-path');
     const ffmpegPathInput = document.getElementById('ffmpeg-path');
     const downloadFolderInput = document.getElementById('download-folder');
+    const shellSelect = document.getElementById('shell');
+    const cookiesBrowserSelect = document.getElementById('cookies-browser');
     const manualTip = document.getElementById('manual-tip');
-  
+
+    const SETTINGS = ['ytdlpPath', 'ffmpegPath', 'downloadFolder', 'shell', 'cookiesBrowser'];
+    const detectedShell = VideoCommands.detectShell(
+      (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform);
+    const detectedBrowser = VideoCommands.detectBrowser({
+      userAgent: navigator.userAgent,
+      brands: navigator.userAgentData && navigator.userAgentData.brands,
+      isBrave: !!navigator.brave
+    });
+
     let videoUrl = null;
-  
+    let statusTimer = null;
+
+    shellSelect.options[0].textContent = 'Auto-detect (' + VideoCommands.SHELLS[detectedShell] + ')';
+    cookiesBrowserSelect.options[0].textContent = 'Auto-detect (' +
+      cookiesBrowserSelect.querySelector('option[value="' + detectedBrowser + '"]').textContent + ')';
+
     // Load saved settings
-    chrome.storage.local.get(['ytdlpPath', 'ffmpegPath', 'downloadFolder'], function(result) {
+    chrome.storage.local.get(SETTINGS, function(result) {
       if(result.ytdlpPath) ytdlpPathInput.value = result.ytdlpPath;
       if(result.ffmpegPath) ffmpegPathInput.value = result.ffmpegPath;
       if(result.downloadFolder) downloadFolderInput.value = result.downloadFolder;
+      shellSelect.value = result.shell || 'auto';
+      cookiesBrowserSelect.value = result.cookiesBrowser || 'auto';
     });
-  
+
     // Settings panel toggle
     showSettingsBtn.addEventListener('click', function() {
       mainPanel.classList.add('hidden');
       settingsPanel.classList.remove('hidden');
     });
-  
+
     backToMainBtn.addEventListener('click', function() {
       settingsPanel.classList.add('hidden');
       mainPanel.classList.remove('hidden');
     });
-  
+
     saveSettingsBtn.addEventListener('click', function() {
       chrome.storage.local.set({
-        ytdlpPath: ytdlpPathInput.value,
-        ffmpegPath: ffmpegPathInput.value,
-        downloadFolder: downloadFolderInput.value
+        ytdlpPath: ytdlpPathInput.value.trim(),
+        ffmpegPath: ffmpegPathInput.value.trim(),
+        downloadFolder: downloadFolderInput.value.trim(),
+        shell: shellSelect.value,
+        cookiesBrowser: cookiesBrowserSelect.value
       }, function() {
-        statusDiv.textContent = 'Settings saved!';
-        statusDiv.style.backgroundColor = '#d4edda';
+        showStatus('Settings saved!', true);
         settingsPanel.classList.add('hidden');
         mainPanel.classList.remove('hidden');
-        setTimeout(() => {
-          statusDiv.textContent = '';
-          statusDiv.style.backgroundColor = 'transparent';
-        }, 2000);
       });
     });
-  
+
     // Detect video from current tab and get page title
     detectButton.addEventListener('click', function() {
-    chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
-      chrome.tabs.sendMessage(tabs[0].id, {action: "detectVideo"}, function(response) {
-        if(response && response.videoManifestUrl) {
-          videoUrl = processManifestUrl(response.videoManifestUrl);
-          videoInfo.classList.remove('hidden');
-          
-          // Get the title of the current tab's page
-          const pageTitle = tabs[0].title || 'video';  // Default to 'video' if no title is available
-          filenameInput.value = pageTitle; // Set filename to the page title
-          
-          statusDiv.textContent = 'Video detected successfully!';
-          statusDiv.style.backgroundColor = '#d4edda';
-          setTimeout(() => {
-            statusDiv.textContent = '';
-            statusDiv.style.backgroundColor = 'transparent';
-          }, 2000);
-        } else {
-          statusDiv.textContent = 'No video detected. Make sure you are on a page with a SharePoint or Streams video and start playing it first.';
-          statusDiv.style.backgroundColor = '#f8d7da';
-        }
+      chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
+        chrome.tabs.sendMessage(tabs[0].id, {action: "detectVideo"}, function(response) {
+          if(response && response.videoManifestUrl) {
+            videoUrl = VideoCommands.trimManifestUrl(response.videoManifestUrl);
+            videoInfo.classList.remove('hidden');
+
+            // Get the title of the current tab's page
+            const pageTitle = tabs[0].title || 'video';  // Default to 'video' if no title is available
+            filenameInput.value = pageTitle; // Set filename to the page title
+
+            showStatus('Video detected successfully!', true);
+          } else {
+            showStatus('No video detected. Make sure you are on a page with a SharePoint or Streams video and start playing it first.', false, 0);
+          }
+        });
       });
     });
-  });
-  
-  // Generate basic FFmpeg command
-  copyCommandButton.addEventListener('click', function() {
-    if(!videoUrl) {
-      statusDiv.textContent = 'No video URL detected.';
-      statusDiv.style.backgroundColor = '#f8d7da';
-      return;
-    }
-  
-    chrome.storage.local.get(['ffmpegPath', 'downloadFolder'], function(result) {
-      const filename = sanitizeFilename(filenameInput.value) || 'video.mp4';
-      const ffmpegPath = result.ffmpegPath || 'ffmpeg';
-      const downloadFolder = result.downloadFolder || '.';
-      const outputPath = downloadFolder ? `${downloadFolder}/${filename}` : filename;
-      
-      // Create the command (basic - may get lowest quality)
-      const command = `${ffmpegPath} -i "${videoUrl}" -c copy "${outputPath}"`;
-      
-      // Display the command
-      ffmpegCommand.textContent = command;
-      commandSection.classList.remove('hidden');
-      manualTip.style.display = 'none';
-    });
-  });
 
-  // Generate best quality FFmpeg command
-  copyBestQualityButton.addEventListener('click', function() {
-    if(!videoUrl) {
-      statusDiv.textContent = 'No video URL detected.';
-      statusDiv.style.backgroundColor = '#f8d7da';
-      return;
-    }
-  
-    chrome.storage.local.get(['ffmpegPath', 'downloadFolder'], function(result) {
-      const filename = sanitizeFilename(filenameInput.value) || 'video.mp4';
-      const ffmpegPath = result.ffmpegPath || 'ffmpeg';
-      const downloadFolder = result.downloadFolder || '.';
-      const outputPath = downloadFolder ? `${downloadFolder}/${filename}` : filename;
-      
-      // Create the command - select best quality video and audio streams
-      // -map 0:v:0 selects first video variant, -map 0:a:0 selects first audio variant
-      // Using variant streams (v:0, a:0) lets FFmpeg pick the best quality within each type
-      const command = `${ffmpegPath} -i "${videoUrl}" -map 0:v:0 -map 0:a:0 -c copy "${outputPath}"`;
-      
-      // Display the command
-      ffmpegCommand.textContent = command;
-      commandSection.classList.remove('hidden');
-      manualTip.style.display = 'none';
+    // Generate basic FFmpeg command
+    copyCommandButton.addEventListener('click', function() {
+      if(!requireVideo()) return;
+      withCommands(function(commands, shellName) {
+        showCommand(commands.ffmpeg, formattedFor(shellName));
+      });
     });
-  });
 
-  
-  // Generate basic yt-dlp command
-  copyYtdlpButton.addEventListener('click', function() {
-    if(!videoUrl) {
-      statusDiv.textContent = 'No video URL detected.';
-      statusDiv.style.backgroundColor = '#f8d7da';
-      return;
-    }
-  
-    chrome.storage.local.get(['ytdlpPath', 'downloadFolder'], function(result) {
-      const filename = sanitizeFilename(filenameInput.value) || 'video.mp4';
-      const ytdlpPath = result.ytdlpPath || 'yt-dlp';
-      const downloadFolder = result.downloadFolder || '.';
-      const outputPath = downloadFolder ? `${downloadFolder}/${filename}` : filename;
-      
-      // Create the command with browser cookies
-      const command = `${ytdlpPath} --cookies-from-browser chrome "${videoUrl}" -o "${outputPath}"`;
-      
-      // Display the command
-      ffmpegCommand.textContent = command;
-      commandSection.classList.remove('hidden');
-      manualTip.style.display = 'none';
+    // Generate best quality FFmpeg command
+    copyBestQualityButton.addEventListener('click', function() {
+      if(!requireVideo()) return;
+      withCommands(function(commands, shellName) {
+        showCommand(commands.ffmpegBest, formattedFor(shellName));
+      });
     });
-  });
 
-  // Copy manifest URL
-  copyManifestUrlButton.addEventListener('click', function() {
-    if(!videoUrl) {
-      statusDiv.textContent = 'No video URL detected.';
-      statusDiv.style.backgroundColor = '#f8d7da';
-      return;
-    }
-    
-    navigator.clipboard.writeText(videoUrl).then(() => {
-      statusDiv.textContent = 'Manifest URL copied to clipboard!';
-      statusDiv.style.backgroundColor = '#d4edda';
-      setTimeout(() => {
-        statusDiv.textContent = '';
-        statusDiv.style.backgroundColor = 'transparent';
-      }, 2000);
+    // Generate yt-dlp command
+    copyYtdlpButton.addEventListener('click', function() {
+      if(!requireVideo()) return;
+      withCommands(function(commands, shellName) {
+        showCommand(commands.ytdlp, 'yt-dlp picks the best video and audio by itself. It needs ffmpeg installed to merge them. ' +
+          formattedFor(shellName));
+      });
     });
-  });
 
-  // Copy ffprobe command
-  copyFfprobeButton.addEventListener('click', function() {
-    if(!videoUrl) {
-      statusDiv.textContent = 'No video URL detected.';
-      statusDiv.style.backgroundColor = '#f8d7da';
-      return;
-    }
-    
-    const ffprobeCommand = `ffprobe -i "${videoUrl}" -show_streams`;
-    
-    navigator.clipboard.writeText(ffprobeCommand).then(() => {
-      statusDiv.textContent = 'ffprobe command copied!';
-      statusDiv.style.backgroundColor = '#d4edda';
-      manualTip.style.display = 'block';
-      setTimeout(() => {
-        statusDiv.textContent = '';
-        statusDiv.style.backgroundColor = 'transparent';
-      }, 2000);
+    // Copy manifest URL
+    copyManifestUrlButton.addEventListener('click', function() {
+      if(!requireVideo()) return;
+      navigator.clipboard.writeText(videoUrl).then(() => {
+        showStatus('Manifest URL copied to clipboard!', true);
+      });
     });
-  });
-  
+
+    // Copy ffprobe command
+    copyFfprobeButton.addEventListener('click', function() {
+      if(!requireVideo()) return;
+      withCommands(function(commands) {
+        navigator.clipboard.writeText(commands.ffprobe).then(() => {
+          showStatus('ffprobe command copied!', true);
+          manualTip.style.display = 'block';
+        });
+      });
+    });
+
     // Copy command to clipboard
     copyToClipboard.addEventListener('click', function() {
       const command = ffmpegCommand.textContent;
       navigator.clipboard.writeText(command).then(() => {
-        statusDiv.textContent = 'Command copied to clipboard!';
-        statusDiv.style.backgroundColor = '#d4edda';
-        setTimeout(() => {
-          statusDiv.textContent = '';
-          statusDiv.style.backgroundColor = 'transparent';
-        }, 2000);
+        showStatus('Command copied to clipboard!', true);
       });
     });
-  
-    // Process the manifest URL to extract the correct download URL
-    function processManifestUrl(url) {
-      const indexPos = url.indexOf('index&format=dash');
-      if(indexPos !== -1) {
-        return url.substring(0, indexPos + 'index&format=dash'.length);
-      }
-      return url;
+
+    function requireVideo() {
+      if(!videoUrl) showStatus('No video URL detected.', false, 0);
+      return !!videoUrl;
     }
 
-    // Sanitize filename to remove invalid characters
-    function sanitizeFilename(filename) {
-      if(!filename) return '';
-      // Remove or replace invalid filename characters
-      let sanitized = filename.replace(/[<>:"/\\|?*]/g, '_');
-      // Ensure it ends with .mp4
-      if(!sanitized.toLowerCase().endsWith('.mp4')) {
-        sanitized += '.mp4';
+    // Show a status message; it disappears after clearAfterMs unless that is 0
+    function showStatus(message, ok, clearAfterMs) {
+      clearTimeout(statusTimer);
+      statusDiv.textContent = message;
+      statusDiv.style.backgroundColor = !message ? 'transparent' : ok ? '#d4edda' : '#f8d7da';
+      if(message && clearAfterMs !== 0) {
+        statusTimer = setTimeout(() => {
+          statusDiv.textContent = '';
+          statusDiv.style.backgroundColor = 'transparent';
+        }, clearAfterMs || 2000);
       }
-      return sanitized;
+    }
+
+    function showCommand(command, note) {
+      ffmpegCommand.textContent = command;
+      commandNote.textContent = note;
+      commandSection.classList.remove('hidden');
+      manualTip.style.display = 'none';
+    }
+
+    // Build all commands for the detected video with the saved settings
+    function withCommands(callback) {
+      chrome.storage.local.get(SETTINGS, function(result) {
+        const shell = result.shell && result.shell !== 'auto' ? result.shell : detectedShell;
+        const cookiesBrowser = result.cookiesBrowser && result.cookiesBrowser !== 'auto' ?
+          result.cookiesBrowser : detectedBrowser;
+        const commands = VideoCommands.buildCommands(videoUrl, {
+          filename: VideoCommands.sanitizeFilename(filenameInput.value) || 'video.mp4',
+          ffmpegPath: result.ffmpegPath,
+          ytdlpPath: result.ytdlpPath,
+          downloadFolder: result.downloadFolder,
+          shell: shell,
+          cookiesBrowser: cookiesBrowser
+        });
+        callback(commands, VideoCommands.SHELLS[shell]);
+      });
+    }
+
+    function formattedFor(shellName) {
+      return 'Formatted for ' + shellName + '; you can change this in Settings.';
     }
   });
 
