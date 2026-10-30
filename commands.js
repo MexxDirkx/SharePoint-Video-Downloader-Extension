@@ -236,6 +236,13 @@
     };
   }
 
+  // Combine a downloaded video file and audio file into one MP4, without re-encoding.
+  //   options: { ffmpegPath, shell }
+  function muxCommand(videoFile, audioFile, outputFile, options) {
+    return commandLine(options.ffmpegPath || 'ffmpeg', ['-i', videoFile, '-i', audioFile,
+      '-map', '0:v', '-map', '1:a', '-c', 'copy', outputFile], options.shell);
+  }
+
   const api = {
     SHELLS,
     trimManifestUrl,
@@ -250,7 +257,8 @@
     bestRepresentation,
     selectBestStreams,
     streamsFromManifest,
-    buildCommands
+    buildCommands,
+    muxCommand
   };
 
   if (typeof module !== 'undefined' && module.exports) {

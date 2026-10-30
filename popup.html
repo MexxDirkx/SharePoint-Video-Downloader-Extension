@@ -115,6 +115,16 @@
       font-size: 13px;
       margin-bottom: 8px;
     }
+    .job {
+      margin: 10px 0;
+      padding: 8px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-size: 13px;
+    }
+    .job progress {
+      width: 100%;
+    }
     details {
       margin-top: 12px;
     }
@@ -135,8 +145,19 @@
     <input type="text" id="filename" placeholder="video">
 
     <div class="button-group">
+      <button id="download-video" class="button button-success" disabled>Download Video</button>
+    </div>
+    <div class="button-group">
       <button id="download-srt" class="button" disabled>Transcript (SRT)</button>
       <button id="download-vtt" class="button" disabled>Transcript (VTT)</button>
+    </div>
+
+    <div id="job" class="job hidden">
+      <div id="job-text"></div>
+      <progress id="job-progress" max="1" value="0"></progress>
+      <div class="code-block hidden" id="job-command"></div>
+      <button id="job-copy" class="button button-secondary button-small hidden">Copy ffmpeg Command</button>
+      <button id="job-cancel" class="button button-secondary button-small hidden">Cancel</button>
     </div>
 
     <div id="status" class="status"></div>
@@ -185,6 +206,11 @@
 
   <div id="settings-panel" class="settings-panel hidden">
     <h3>Settings</h3>
+    <p>Save downloaded videos:</p>
+    <select id="save-mode">
+      <option value="browser">Keep in the browser, then save each file</option>
+      <option value="folder">Write straight to a folder I choose (for long videos)</option>
+    </select>
     <p>Path to FFmpeg (leave empty if it is on your PATH):</p>
     <input type="text" id="ffmpeg-path" placeholder="C:\ffmpeg\bin\ffmpeg.exe">
     <p>Path to yt-dlp (leave empty if it is on your PATH):</p>

@@ -10,6 +10,7 @@ by Brendan Gooden (version 1.7.1, commit 83664b2f):
   transcript metadata, `g_fileInfo` and the decryption key in `g_streamBootstrapContent`
 - `media.js`: DASH-SEA key and IV handling, oneDrive.transcode segment enumeration, the
   transcript API calls and their response shapes
+- `downloader.js`: the retry policy and the segment download pool
 
 ```
 MIT License

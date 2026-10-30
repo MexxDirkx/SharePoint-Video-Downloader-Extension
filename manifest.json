@@ -58,7 +58,7 @@
           "https://teams.microsoft.com/*",
           "https://teams.cloud.microsoft/*"
         ],
-        "js": ["commands.js", "media.js", "content.js"],
+        "js": ["commands.js", "media.js", "downloader.js", "content.js"],
         "run_at": "document_start",
         "all_frames": true
       }

@@ -1,8 +1,15 @@
 document.addEventListener('DOMContentLoaded', function() {
     const pageStatus = document.getElementById('page-status');
     const filenameInput = document.getElementById('filename');
+    const downloadVideoButton = document.getElementById('download-video');
     const downloadSrtButton = document.getElementById('download-srt');
     const downloadVttButton = document.getElementById('download-vtt');
+    const jobBox = document.getElementById('job');
+    const jobText = document.getElementById('job-text');
+    const jobProgress = document.getElementById('job-progress');
+    const jobCommand = document.getElementById('job-command');
+    const jobCopyButton = document.getElementById('job-copy');
+    const jobCancelButton = document.getElementById('job-cancel');
     const statusDiv = document.getElementById('status');
     const advanced = document.getElementById('advanced');
     const cliUnavailable = document.getElementById('cli-unavailable');
@@ -23,13 +30,14 @@ document.addEventListener('DOMContentLoaded', function() {
     const mainPanel = document.getElementById('main-panel');
     const saveSettingsBtn = document.getElementById('save-settings');
     const backToMainBtn = document.getElementById('back-to-main');
+    const saveModeSelect = document.getElementById('save-mode');
     const ytdlpPathInput = document.getElementById('yt-dlp-path');
     const ffmpegPathInput = document.getElementById('ffmpeg-path');
     const downloadFolderInput = document.getElementById('download-folder');
     const shellSelect = document.getElementById('shell');
     const cookiesBrowserSelect = document.getElementById('cookies-browser');
 
-    const SETTINGS = ['ytdlpPath', 'ffmpegPath', 'downloadFolder', 'shell', 'cookiesBrowser'];
+    const SETTINGS = ['ytdlpPath', 'ffmpegPath', 'downloadFolder', 'shell', 'cookiesBrowser', 'saveMode'];
     const detectedShell = VideoCommands.detectShell(
       (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform);
     const detectedBrowser = VideoCommands.detectBrowser({
@@ -40,6 +48,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     let tab = null;
     let summary = null;
+    let job = null;
     let filenameEdited = false;
     // Command-line view of the detected manifest: { url, token, frameId, loading, error, streams, protection, caution }
     let cli = null;
@@ -56,6 +65,7 @@ document.addEventListener('DOMContentLoaded', function() {
       if(result.downloadFolder) downloadFolderInput.value = result.downloadFolder;
       shellSelect.value = result.shell || 'auto';
       cookiesBrowserSelect.value = result.cookiesBrowser || 'none';
+      saveModeSelect.value = result.saveMode || 'browser';
     });
 
     // Settings panel toggle
@@ -75,7 +85,8 @@ document.addEventListener('DOMContentLoaded', function() {
         ffmpegPath: ffmpegPathInput.value.trim(),
         downloadFolder: downloadFolderInput.value.trim(),
         shell: shellSelect.value,
-        cookiesBrowser: cookiesBrowserSelect.value
+        cookiesBrowser: cookiesBrowserSelect.value,
+        saveMode: saveModeSelect.value
       }, function() {
         showStatus('Settings saved!', true);
         settingsPanel.classList.add('hidden');
@@ -107,23 +118,42 @@ document.addEventListener('DOMContentLoaded', function() {
       if(!Object.keys(state.frames).length) {
         pageStatus.textContent = 'Open a video on SharePoint, OneDrive or Teams. If this is such a page, reload it: ' +
           'pages opened before the extension was installed or updated need a reload.';
+      } else if(video && video.kind === 'transcode' && !video.hasKey) {
+        pageStatus.textContent = 'Video found. Let it play a few more seconds so the extension can get its decryption key.';
       } else if(video) {
-        pageStatus.textContent = 'Video found.';
+        pageStatus.textContent = 'Video found. Download Video saves the best quality in your browser.';
       } else {
-        pageStatus.textContent = 'No video stream seen yet: start playing the video.';
+        pageStatus.textContent = 'No video stream seen yet: start playing the video. ' +
+          (summary.pageFrameId !== null ? 'Download Video already works if the owner allows downloading the file.' : '');
       }
 
       if(!filenameEdited) {
         filenameInput.value = VideoMedia.fileBaseName(summary.title || tab.title || 'video');
       }
 
+      job = state.job;
+      const running = !!job && (job.state === 'running' || job.state === 'waiting');
+      downloadVideoButton.disabled = summary.pageFrameId === null || running;
       const noTranscript = summary.transcriptFrameId === null || summary.hasTranscripts === false;
       downloadSrtButton.disabled = noTranscript;
       downloadVttButton.disabled = noTranscript;
       downloadSrtButton.title = summary.hasTranscripts === false ? 'This video has no transcript' : '';
       downloadVttButton.title = downloadSrtButton.title;
+      renderJob(running);
 
       if(advanced.open) updateCli();
+    }
+
+    function renderJob(running) {
+      jobBox.classList.toggle('hidden', !job);
+      if(!job) return;
+      jobText.textContent = job.text || '';
+      jobProgress.classList.toggle('hidden', !(running && job.total));
+      if(job.total) jobProgress.value = job.done / job.total;
+      jobCancelButton.classList.toggle('hidden', !running);
+      jobCommand.textContent = job.muxCommand || '';
+      jobCommand.classList.toggle('hidden', !job.muxCommand);
+      jobCopyButton.classList.toggle('hidden', !job.muxCommand);
     }
 
     function baseName() {
@@ -139,6 +169,36 @@ document.addEventListener('DOMContentLoaded', function() {
         }
       });
     }
+
+    downloadVideoButton.addEventListener('click', function() {
+      if(!summary || summary.pageFrameId === null) return;
+      readSettings(function(settings) {
+        const base = baseName();
+        const muxCommand = VideoCommands.muxCommand(base + '.video.mp4', base + '.audio.m4a', base + '.mp4', settings);
+        sendToFrame(summary.pageFrameId, {
+          action: 'downloadVideo',
+          baseName: base,
+          muxCommand: muxCommand,
+          saveMode: settings.saveMode
+        }, function(response) {
+          if(response.error) {
+            showStatus(response.error, false, 0);
+          } else {
+            showStatus('Download started. It runs in the page, so you can close this popup; keep the tab open.', true, 5000);
+          }
+        });
+      });
+    });
+
+    jobCancelButton.addEventListener('click', function() {
+      if(job) sendToFrame(job.frameId, {action: 'cancel'}, function() {});
+    });
+
+    jobCopyButton.addEventListener('click', function() {
+      navigator.clipboard.writeText(jobCommand.textContent).then(() => {
+        showStatus('Command copied to clipboard!', true);
+      });
+    });
 
     downloadSrtButton.addEventListener('click', function() {
       downloadTranscript('srt');
@@ -187,7 +247,7 @@ document.addEventListener('DOMContentLoaded', function() {
         cli = null;
         showCliUnavailable(video ?
           'This video uses SharePoint\'s newer streaming format, which is encrypted and only works with your ' +
-          'browser\'s sign-in. Command-line tools can\'t download it.' :
+          'browser\'s sign-in. Command-line tools can\'t download it; use Download Video.' :
           'No video stream seen yet. Start playing the video.');
         return;
       }
@@ -238,16 +298,16 @@ document.addEventListener('DOMContentLoaded', function() {
       if(cli.loading) {
         showCliUnavailable('Checking whether command-line tools can download this video...');
       } else if(cli.error) {
-        showCliUnavailable('Could not read the video manifest (' + cli.error + '). Command-line tools won\'t work either.');
+        showCliUnavailable('Could not read the video manifest (' + cli.error + '). Command-line tools won\'t work either; use Download Video.');
       } else if(cli.protection.kind !== 'none') {
         showCliUnavailable('This video is encrypted (' + cli.protection.name + '). ffmpeg and yt-dlp can\'t decrypt it ' +
           'and its segments need your browser\'s sign-in, so command-line tools can\'t download it. ' +
-          (cli.protection.kind === 'sea' ? '' : 'It can only be played in the browser.'));
+          (cli.protection.kind === 'sea' ? 'Use Download Video, which decrypts it in the browser.' : 'It can only be played in the browser.'));
       } else {
         cliUnavailable.classList.add('hidden');
         cliSection.classList.remove('hidden');
         cliCaution.textContent = cli.caution ? 'The video segments are served by SharePoint and need your sign-in ' +
-          'cookies, which these tools don\'t have, so they will probably fail.' : '';
+          'cookies, which these tools don\'t have, so they will probably fail; Download Video is more reliable.' : '';
       }
     }
 
@@ -339,7 +399,8 @@ document.addEventListener('DOMContentLoaded', function() {
           ytdlpPath: result.ytdlpPath,
           downloadFolder: result.downloadFolder,
           shell: result.shell && result.shell !== 'auto' ? result.shell : detectedShell,
-          cookiesBrowser: result.cookiesBrowser === 'auto' ? detectedBrowser : result.cookiesBrowser || 'none'
+          cookiesBrowser: result.cookiesBrowser === 'auto' ? detectedBrowser : result.cookiesBrowser || 'none',
+          saveMode: result.saveMode || 'browser'
         });
       });
     }
