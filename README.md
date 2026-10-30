@@ -149,7 +149,7 @@ The handling of the 2026 SharePoint changes builds on research and code from [ms
 
 ## License
 
-MIT License
+MIT License, see [LICENSE](LICENSE). Third-party code is listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## Contributing
 
