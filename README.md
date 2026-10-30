@@ -1,121 +1,155 @@
 # SharePoint Video Downloader Extension
 
-A browser extension to download videos from SharePoint and Microsoft Streams.
+A browser extension that downloads videos and their transcripts from SharePoint, OneDrive and Teams recordings, including view-only videos that SharePoint streams in encrypted form. The download and decryption happen in your browser with your own sign-in; nothing is sent anywhere else.
 
 ## Features
 
-- Detect videos on SharePoint and Microsoft Streams pages
-- Generate FFmpeg commands for downloading
-- Copy video manifest URL directly
-- Generate ffprobe command to analyze available streams
-- Support for high-quality downloads with stream selection
-- Download video transcripts as SRT files
-- Configurable FFmpeg path and download folder
+- Downloads the original file when the owner allows downloading
+- Otherwise downloads the stream the player uses, in the best quality, and decrypts it in the browser
+- Saves transcripts as SRT or WebVTT subtitles (with speaker names in WebVTT)
+- Works on SharePoint and OneDrive pages and on recordings embedded in Teams
+- Shows its progress in a small panel on the page, so you can close the popup while it runs
+- For unencrypted videos: ffmpeg, yt-dlp and ffprobe commands under *Advanced*, quoted correctly for PowerShell, Command Prompt or bash/zsh
+
+## Requirements
+
+- **Google Chrome, Microsoft Edge, Brave** or another Chromium-based browser, version 111 or newer
+- **ffmpeg** (optional). Videos usually download as two files, video and audio. ffmpeg combines them into one MP4 in a second, without re-encoding. It's also needed for the command-line options under *Advanced*, together with **yt-dlp**.
+
+### Installing ffmpeg and yt-dlp
+
+**Windows** (winget is included in Windows 10 and 11):
+
+```
+winget install --id Gyan.FFmpeg -e
+winget install --id yt-dlp.yt-dlp -e
+```
+
+Open a new terminal window afterwards so it finds the new programs. If you use Scoop or Chocolatey instead: `scoop install ffmpeg yt-dlp` or `choco install ffmpeg yt-dlp`. You can also download [ffmpeg](https://ffmpeg.org/download.html) and [yt-dlp](https://github.com/yt-dlp/yt-dlp/releases/latest) manually and enter their paths in the extension's Settings.
+
+**macOS** ([Homebrew](https://brew.sh)):
+
+```
+brew install ffmpeg yt-dlp
+```
+
+**Linux**: install ffmpeg with your package manager, for example `sudo apt install ffmpeg` on Debian and Ubuntu. Distribution packages of yt-dlp are often out of date, so install it with `pipx install yt-dlp` or download the `yt-dlp` binary from its [releases page](https://github.com/yt-dlp/yt-dlp/releases/latest).
+
+Check that they work with `ffmpeg -version` and `yt-dlp --version`.
 
 ## Installation
 
-### Prerequisites
+The extension is not in the Chrome Web Store or Edge Add-ons store, so you load it as an "unpacked" extension:
 
-1. **FFmpeg** - Required to download videos
-   - **Windows**: Download from [ffmpeg.org](https://ffmpeg.org/download.html) or install via:
-     ```
-     winget install ffmpeg
-     ```
-   - **macOS**: Install via Homebrew:
-     ```
-     brew install ffmpeg
-     ```
-   - **Linux**: Install via package manager:
-     ```
-     sudo apt install ffmpeg
-     ```
+1. **Get the files.** Either [download the ZIP](https://github.com/MexxDirkx/SharePoint-Video-Downloader-Extension/archive/refs/heads/main.zip) and extract it, or clone the repository:
+   ```
+   git clone https://github.com/MexxDirkx/SharePoint-Video-Downloader-Extension.git
+   ```
+   Put the folder somewhere permanent. The browser loads the extension from it every time it starts, so don't delete it.
+2. **Open the extensions page**: type `chrome://extensions` (Chrome), `edge://extensions` (Edge) or `brave://extensions` (Brave) in the address bar.
+3. **Turn on Developer mode**: the switch is in the top right corner in Chrome and Brave, and in the left sidebar in Edge.
+4. Click **Load unpacked** and select the folder that contains `manifest.json`. After extracting the ZIP this is the `SharePoint-Video-Downloader-Extension-main` folder.
+5. **Pin the extension**: click the Extensions button (puzzle piece) in the toolbar and pin *SharePoint Video Downloader* so its icon is always visible.
+6. **Reload any SharePoint or Teams tabs** that were already open. The extension only sees pages loaded after it was installed.
 
-### Install the Extension
+**Updating:** replace the files in the folder with the new version (or run `git pull`), click the reload button on the extension's card on the extensions page, and reload your SharePoint and Teams tabs.
 
-#### Chrome
-1. Download or clone this repository
-2. Open Chrome and navigate to `chrome://extensions/`
-3. Enable **Developer mode** (toggle in the top right corner)
-4. Click **Load unpacked**
-5. Select the folder containing this extension
-6. The extension icon should appear in your toolbar
+**About the permissions:** the extension's details page says it can "read and change your data" on SharePoint, `svc.ms` (Microsoft's media service) and Teams. It needs that to see the video player's requests on those sites and to download the video with your sign-in. Apart from the download panel it adds, it doesn't change the pages, and it sends nothing to any other site.
 
-#### Microsoft Edge
-1. Download or clone this repository
-2. Open Edge and navigate to `edge://extensions/`
-3. Enable **Developer mode** (toggle in the left sidebar)
-4. Click **Load unpacked**
-5. Select the folder containing this extension
-6. The extension icon should appear in your toolbar
+### Firefox
 
-#### Firefox
-1. Download or clone this repository
-2. Open Firefox and navigate to `about:debugging#/runtime/this-firefox`
-3. Click **Load Temporary Add-on**
-4. Select the `manifest.json` file from the extension folder
-5. Note: Firefox requires reloading the extension after each browser restart
+Firefox is not supported. The extension uses Chrome features that Firefox doesn't have: a background service worker and the request headers it reads with `webRequest` (`extraHeaders`).
 
 ## Usage
 
-1. Navigate to a SharePoint or Microsoft Streams page containing a video
-2. **Start playing the video** (this is required to detect the video URL)
-3. Click on the extension icon in your toolbar
-4. Click **Detect Video**
-5. Choose your download method:
-
-### Download Methods
-
-#### Quick Download (Default Quality)
-- Click **Generate FFmpeg Command** to get a basic download command
-- Note: This may download the lowest quality stream by default
-
-#### Best Quality Download (Recommended)
-- Click **Copy Best Quality Command** to get a command that automatically selects the highest quality video and audio streams
-
-#### Manual Quality Selection
-1. Click **Copy ffprobe Command** to analyze available streams
-2. Run the ffprobe command in your terminal to see all available streams
-3. Click **Copy Manifest URL** to get the raw video URL
-4. Use FFmpeg with `-map` flags to select specific streams:
+1. Open the video on SharePoint, OneDrive or in Teams and **let it play for a few seconds**. The extension picks up the video stream and its decryption key from the player.
+2. Click the extension icon. The popup says whether it found the video and fills in a file name; change it if you like.
+3. Click **Download Video**. A panel appears in the bottom right corner of the page:
+   - If the owner allows downloading, the original file downloads right away through your browser.
+   - Otherwise the extension downloads the best quality video and audio, decrypting them if needed, and shows its progress. When it's done, click **Save** for each file. You can close the popup in the meantime, but keep the tab open.
+4. The video and audio come as two files, `<name>.video.mp4` and `<name>.audio.m4a`. To combine them into one MP4, run the ffmpeg command shown in the panel and in the popup, in the folder where you saved the files:
    ```
-   ffmpeg -i "MANIFEST_URL" -map 0:v:0 -map 0:a:0 -c copy output.mp4
+   ffmpeg -i 'Name.video.mp4' -i 'Name.audio.m4a' -map 0:v -map 1:a -c copy 'Name.mp4'
    ```
-   Replace the stream indices based on ffprobe output
+   Both files also play on their own, for example in VLC.
 
-### Download Transcript
-- If the video has a transcript/captions, click **Download Transcript** to save it as an SRT file
+For long videos, choose **Settings → Save downloaded videos → Write straight to a folder I choose**. The panel then asks for a folder and writes the files there while downloading, instead of keeping them in the browser until you click Save. This works when the video page is open on its own, not when it's embedded in Teams. Files that are already in the folder are kept; new ones get a number, like `Name (1).video.mp4`.
+
+### Transcripts
+
+Click **Transcript (SRT)** or **Transcript (VTT)**. The buttons are disabled when SharePoint says the video has no transcript. SRT works in most video players; WebVTT also keeps the speaker names.
+
+### Advanced: command-line tools
+
+Older SharePoint videos, which aren't encrypted, can also be downloaded with ffmpeg or yt-dlp. Open **Advanced: command-line tools** in the popup. The extension checks the video first and only shows the commands when they can work; otherwise it explains why not.
+
+The commands include a temporary access token (the `X-SPOPacToken` header), so run them soon and don't share them. Choose your terminal under **Settings → Format commands for**, because PowerShell, Command Prompt and bash/zsh need different quoting.
+
+- **Best Quality Command**: ffmpeg with the highest resolution video and highest bitrate audio. The note under the command shows what was picked.
+- **Generate yt-dlp Command**: yt-dlp picks the best video and audio by itself and merges them.
+- **Generate FFmpeg Command**: lets ffmpeg choose the streams, which can give the lowest bitrate audio.
+- **Copy ffprobe Command** / **Copy Manifest URL**: to choose streams yourself. ffprobe lists them as `Stream #0:3: Video: h264 ..., 1920x1080`. Then run ffmpeg with the same `-headers` and `-i` parts as the ffprobe command, quoted the same way, and the stream numbers you want: `ffmpeg -headers 'X-SPOPacToken: <token>' -i '<manifest URL>' -map 0:3 -map 0:5 -c copy output.mp4`.
 
 ## Settings
 
-Click **Settings** in the extension popup to configure:
-- **Path to FFmpeg**: Full path to ffmpeg executable (e.g., `C:\ffmpeg\bin\ffmpeg.exe`)
-- **Download folder**: Where to save downloaded videos (e.g., `C:\Downloads`)
+- **Save downloaded videos**: keep them in the browser until you click Save (default), or write them straight to a folder you choose.
+- **Path to FFmpeg / Path to yt-dlp**: leave these empty if the programs are on your PATH. Otherwise enter the full path, e.g. `C:\ffmpeg\bin\ffmpeg.exe`.
+- **Download folder for command-line tools**: where the commands under *Advanced* save the video.
+- **Format commands for**: PowerShell, Command Prompt or bash/zsh (macOS, Linux, WSL). *Auto-detect* chooses PowerShell on Windows and bash/zsh elsewhere.
+- **yt-dlp: use cookies from browser**: adds yt-dlp's `--cookies-from-browser`. *None* by default, because the token in the command is what the media service checks.
 
 ## Troubleshooting
 
-### "No video detected"
-- Make sure you're on a SharePoint or Streams video page
-- Start playing the video before clicking "Detect Video"
-- Try refreshing the page and playing the video again
+### Installing the extension
 
-### Video downloads at low quality
-- Use the **Copy Best Quality Command** button instead of the basic command
-- Or use ffprobe to manually select the highest quality streams
+- **"Manifest file is missing or unreadable"**: you selected the wrong folder. Select the folder that directly contains `manifest.json`; after extracting a ZIP it is often one level deeper.
+- **No Developer mode switch or Load unpacked button, or "blocked by your administrator"**: your organization's browser policy doesn't allow unpacked extensions. Only your IT department can change that.
+- **The icon isn't in the toolbar**: pin it from the Extensions (puzzle piece) menu.
 
-### FFmpeg not found
-- Make sure FFmpeg is installed and added to your system PATH
-- Or specify the full path to FFmpeg in the extension settings
+### Finding the video
 
-## Technical Notes
+- **"Open a video on SharePoint, OneDrive or Teams"** while you are on one: reload the page. Pages that were open before the extension was installed or updated don't have it yet.
+- **"No video stream seen yet"**: start the video and let it play a few seconds, then open the popup again.
+- **"Let it play a few more seconds so the extension can get its decryption key"**: the player hands out the key shortly after playback starts. Keep it playing a little longer.
 
-SharePoint video manifests contain multiple quality streams. By default, FFmpeg selects the first available stream which is often the lowest quality. This extension provides options to:
-- Automatically select the best quality streams
-- Analyze available streams with ffprobe
-- Manually specify which streams to download
+### Downloading
+
+- **"This video is protected with Widevine / PlayReady / FairPlay DRM"**: such videos can only be played in the browser. Nothing can download them.
+- **HTTP 401 or 403 while downloading**: the player's access token expires after a while. Reload the page, play the video for a few seconds and try again.
+- **"The server is busy, retrying..."**: SharePoint throttles fast downloads. The extension waits and tries again automatically, up to eight attempts per part.
+- **The browser asks whether the site may download multiple files**: allow it. Each Save button is a separate download.
+- **Save does nothing in Teams**: open the recording in SharePoint or OneDrive (*Open in browser*) and download it there.
+- **The browser runs out of memory on a very long video**: use *Write straight to a folder I choose* in Settings.
+- **"No audio track was found"** or the file has no sound: the player hadn't fetched the audio yet. Let the video play a little longer and download again.
+- **"Part ... is not video data"** or **"could not be decrypted"**: SharePoint sent an error page instead of video, or the key no longer matches. Reload the page, play the video for a few seconds and try again.
+
+### Command-line tools
+
+- **`ffmpeg` / `yt-dlp` is not recognized, or "command not found"**: the program isn't installed or isn't on your PATH. Open a new terminal after installing, or enter the full path in Settings.
+- **`Server returned 401 Unauthorized`**: the command has no access token or the token expired. Commands from older versions of this extension lack the token. Generate the command again.
+- **ffmpeg says `Error when loading first fragment` or `Invalid data`, or yt-dlp says the video is `DRM protected`**: the video is encrypted, or its parts are only served to your signed-in browser. Use **Download Video** instead.
+- **"No command: ... can't be quoted safely for Command Prompt"** (or PowerShell): the download folder or program path contains characters that terminal would interpret, such as `%` or `"` for Command Prompt. Choose another folder, or another terminal under **Format commands for**.
+- **bash says `event not found`, or Command Prompt says `'inputFormat' is not recognized as an internal or external command`**: the command was formatted for a different terminal. Choose yours under **Format commands for** in Settings.
+
+## How it works
+
+In 2026 Microsoft changed how SharePoint delivers video, which broke command-line downloads:
+
+1. **Tokens instead of signed URLs.** The video manifest (`videomanifest` on `*.svc.ms`) used to work with its URL alone. It now also needs an `X-SPOPacToken` header from the player; without it, the server answers *401 Unauthorized*.
+2. **Encrypted segments served by SharePoint.** The manifest now points at segments on your SharePoint site, which only your signed-in browser can fetch. The segments are encrypted with AES-128 (DASH-SEA); the key comes from the media service with the same token.
+3. **A new streaming format.** Many videos no longer use a manifest at all. The player fetches `oneDrive.transcode` segments from a background worker and gets the AES key from the page.
+
+So the extension works inside the browser. A small script in the page records the manifest request with its token, the page's file information, and the decryption key. The extension's background worker sees the player's requests, including those from the worker. When you click **Download Video**, the extension tries the original file first. If that isn't allowed, it downloads the best quality video and audio segment by segment from the page itself, four at a time, retrying when SharePoint throttles, and decrypts them with the player's key. It doesn't decrypt or work around real DRM (Widevine, PlayReady, FairPlay).
+
+Transcripts come from SharePoint's API for the video file (`/_api/v2.1/drives/.../items/...`), which returns a temporary link to the transcript as JSON.
+
+## Credits
+
+The handling of the 2026 SharePoint changes builds on research and code from [ms-teams-sharepoint-downloader](https://github.com/brendangooden/ms-teams-sharepoint-downloader) by Brendan Gooden (MIT License). Thank you! See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## License
 
-MIT License
+MIT License, see [LICENSE](LICENSE). Third-party code is listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## Contributing
 

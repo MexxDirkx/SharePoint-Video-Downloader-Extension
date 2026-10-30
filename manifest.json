@@ -1,18 +1,26 @@
 {
     "manifest_version": 3,
     "name": "SharePoint Video Downloader",
-    "version": "1.0",
-    "description": "Download videos from SharePoint and Microsoft Streams easily",
+    "version": "1.1",
+    "description": "Download videos and transcripts from SharePoint, OneDrive and Teams recordings",
     "permissions": [
       "activeTab",
       "storage",
-      "clipboardWrite"
+      "clipboardWrite",
+      "webRequest"
     ],
     "host_permissions": [
-      "*://*.sharepoint.com/*",
-      "*://*.microsoftstream.com/*",
-      "*://*.office.com/*"
+      "https://*.sharepoint.com/*",
+      "https://*.sharepoint.com.mcas.ms/*",
+      "https://*.sharepoint.us/*",
+      "https://*.sharepoint-mil.us/*",
+      "https://*.svc.ms/*",
+      "https://teams.microsoft.com/*",
+      "https://teams.cloud.microsoft/*"
     ],
+    "background": {
+      "service_worker": "background.js"
+    },
     "action": {
       "default_popup": "popup.html",
       "default_icon": {
@@ -29,11 +37,30 @@
     "content_scripts": [
       {
         "matches": [
-          "*://*.sharepoint.com/*",
-          "*://*.microsoftstream.com/*",
-          "*://*.office.com/*"
+          "https://*.sharepoint.com/*",
+          "https://*.sharepoint.com.mcas.ms/*",
+          "https://*.sharepoint.us/*",
+          "https://*.sharepoint-mil.us/*",
+          "https://teams.microsoft.com/*",
+          "https://teams.cloud.microsoft/*"
         ],
-        "js": ["content.js"]
+        "js": ["intercept.js"],
+        "run_at": "document_start",
+        "all_frames": true,
+        "world": "MAIN"
+      },
+      {
+        "matches": [
+          "https://*.sharepoint.com/*",
+          "https://*.sharepoint.com.mcas.ms/*",
+          "https://*.sharepoint.us/*",
+          "https://*.sharepoint-mil.us/*",
+          "https://teams.microsoft.com/*",
+          "https://teams.cloud.microsoft/*"
+        ],
+        "js": ["commands.js", "media.js", "downloader.js", "content.js"],
+        "run_at": "document_start",
+        "all_frames": true
       }
     ]
   }

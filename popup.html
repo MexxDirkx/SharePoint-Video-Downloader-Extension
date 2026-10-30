@@ -40,7 +40,8 @@
       padding: 5px 10px;
       font-size: 12px;
     }
-    input[type="text"] {
+    input[type="text"],
+    select {
       width: 100%;
       padding: 8px;
       margin: 8px 0;
@@ -96,6 +97,10 @@
       margin: 10px 0;
       font-size: 12px;
     }
+    .note {
+      font-size: 12px;
+      color: #555;
+    }
     .section-title {
       font-weight: bold;
       margin-top: 15px;
@@ -103,67 +108,138 @@
       font-size: 13px;
       color: #333;
     }
-  </style>
+      .page-status {
+      padding: 8px;
+      border-radius: 4px;
+      background-color: #f3f2f1;
+      font-size: 13px;
+      margin-bottom: 8px;
+    }
+    .job {
+      margin: 10px 0;
+      padding: 8px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-size: 13px;
+    }
+    .job progress {
+      width: 100%;
+    }
+    details {
+      margin-top: 12px;
+    }
+    summary {
+      cursor: pointer;
+      font-weight: bold;
+      font-size: 13px;
+      color: #333;
+    }
+</style>
 </head>
 <body>
   <h2>SharePoint Video Downloader</h2>
   <div id="main-panel">
-    <p>Enter video filename:</p>
-    <input type="text" id="filename" placeholder="video.mp4">
-    
-    <button id="detect-video" class="button">Detect Video</button>
-    
-    <div id="video-info" class="hidden">
-      <p>✓ Video detected! Ready to download.</p>
-      
-      <div class="warning">
-        <strong>⚠️ Quality Note:</strong> SharePoint videos contain multiple quality streams. The basic FFmpeg command may download the lowest quality. Use "Best Quality" or "Manual Selection" for higher quality.
-      </div>
-      
-      <div class="section-title">Quick Options:</div>
-      <div class="button-group">
-        <button id="copy-manifest-url" class="button button-secondary button-small">Copy Manifest URL</button>
-        <button id="copy-ffprobe" class="button button-secondary button-small">Copy ffprobe Command</button>
-      </div>
-      
-      <div class="section-title">Download Commands:</div>
-      <div class="button-group">
-        <button id="copy-command" class="button">Generate FFmpeg Command</button>
-        <button id="copy-best-quality" class="button button-success">Best Quality Command</button>
-      </div>
-      
-      <div id="command-section" class="hidden">
-        <p>Run this command in your terminal:</p>
-        <div class="code-block" id="ffmpeg-command"></div>
-        <button id="copy-to-clipboard" class="button">Copy to Clipboard</button>
-      </div>
-      
-      <div class="tip" id="manual-tip" style="display:none;">
-        <strong>💡 Manual Quality Selection:</strong><br>
-        1. Run the ffprobe command to see available streams<br>
-        2. Note the index of best video &amp; audio streams<br>
-        3. Use: <code>ffmpeg -i "URL" -map 0:X -map 0:Y -c copy output.mp4</code><br>
-        (Replace X and Y with your chosen stream indices)
-      </div>
+    <div id="page-status" class="page-status">Checking this page...</div>
+
+    <p>File name:</p>
+    <input type="text" id="filename" placeholder="video">
+
+    <div class="button-group">
+      <button id="download-video" class="button button-success" disabled>Download Video</button>
     </div>
-    
+    <div class="button-group">
+      <button id="download-srt" class="button" disabled>Transcript (SRT)</button>
+      <button id="download-vtt" class="button" disabled>Transcript (VTT)</button>
+    </div>
+
+    <div id="job" class="job hidden">
+      <div id="job-text"></div>
+      <progress id="job-progress" max="1" value="0"></progress>
+      <div class="code-block hidden" id="job-command"></div>
+      <button id="job-copy" class="button button-secondary button-small hidden">Copy ffmpeg Command</button>
+      <button id="job-cancel" class="button button-secondary button-small hidden">Cancel</button>
+    </div>
+
     <div id="status" class="status"></div>
-    
+
+    <details id="advanced">
+      <summary>Advanced: command-line tools</summary>
+      <div id="cli-unavailable" class="warning hidden"></div>
+      <div id="cli" class="hidden">
+        <div class="warning">
+          <strong>⚠️ Note:</strong> These commands contain a temporary access token for the video. Run them soon and don't share them.
+          <span id="cli-caution"></span>
+        </div>
+
+        <div class="section-title">Quick Options:</div>
+        <div class="button-group">
+          <button id="copy-manifest-url" class="button button-secondary button-small">Copy Manifest URL</button>
+          <button id="copy-ffprobe" class="button button-secondary button-small">Copy ffprobe Command</button>
+        </div>
+
+        <div class="section-title">Download Commands:</div>
+        <div class="button-group">
+          <button id="copy-command" class="button">Generate FFmpeg Command</button>
+          <button id="copy-best-quality" class="button button-success">Best Quality Command</button>
+          <button id="copy-ytdlp-command" class="button button-secondary">Generate yt-dlp Command</button>
+        </div>
+
+        <div id="command-section" class="hidden">
+          <p>Run this command in your terminal:</p>
+          <div class="code-block" id="ffmpeg-command"></div>
+          <p class="note" id="command-note"></p>
+          <button id="copy-to-clipboard" class="button">Copy to Clipboard</button>
+        </div>
+
+        <div class="tip" id="manual-tip" style="display:none;">
+          <strong>💡 Manual Quality Selection:</strong><br>
+          1. Run the ffprobe command to see available streams<br>
+          2. Note the index of best video &amp; audio streams<br>
+          3. Use: <code>ffmpeg -headers 'X-SPOPacToken: TOKEN' -i 'URL' -map 0:X -map 0:Y -c copy output.mp4</code>, with the token, URL and quoting of the ffprobe command<br>
+          (Replace X and Y with your chosen stream indices)
+        </div>
+      </div>
+    </details>
+
     <p class="settings-icon" id="show-settings">⚙️ Settings</p>
   </div>
-  
+
   <div id="settings-panel" class="settings-panel hidden">
-    <h3>FFmpeg Settings</h3>
-    <p>Path to FFmpeg:</p>
+    <h3>Settings</h3>
+    <p>Save downloaded videos:</p>
+    <select id="save-mode">
+      <option value="browser">Keep in the browser, then save each file</option>
+      <option value="folder">Write straight to a folder I choose (for long videos)</option>
+    </select>
+    <p>Path to FFmpeg (leave empty if it is on your PATH):</p>
     <input type="text" id="ffmpeg-path" placeholder="C:\ffmpeg\bin\ffmpeg.exe">
-    <p>Download folder:</p>
+    <p>Path to yt-dlp (leave empty if it is on your PATH):</p>
+    <input type="text" id="yt-dlp-path" placeholder="C:\yt-dlp\yt-dlp.exe">
+    <p>Download folder for command-line tools:</p>
     <input type="text" id="download-folder" placeholder="C:\Downloads">
+    <p>Format commands for:</p>
+    <select id="shell">
+      <option value="auto">Auto-detect</option>
+      <option value="powershell">PowerShell (Windows)</option>
+      <option value="cmd">Command Prompt (Windows)</option>
+      <option value="posix">bash / zsh (macOS, Linux, WSL)</option>
+    </select>
+    <p>yt-dlp: use cookies from browser:</p>
+    <select id="cookies-browser">
+      <option value="none">None</option>
+      <option value="auto">Auto-detect</option>
+      <option value="chrome">Chrome</option>
+      <option value="edge">Edge</option>
+      <option value="firefox">Firefox</option>
+      <option value="brave">Brave</option>
+      <option value="opera">Opera</option>
+    </select>
     <button id="save-settings" class="button">Save Settings</button>
     <button id="back-to-main" class="button">Back</button>
   </div>
 
-  <button id="download-transcript" class="button" disabled>Download Transcript</button>
-  
+  <script src="commands.js"></script>
+  <script src="media.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>
