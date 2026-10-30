@@ -241,6 +241,45 @@
     return line;
   }
 
+  // What makes a value unusable in a command for the shell, for error messages.
+  function problemWith(value, shell) {
+    if (/[\u0000-\u001f\u007f]/.test(value)) return 'contains a line break or another control character';
+    if (shell !== 'posix' && value.includes('"')) return 'contains "';
+    if (shell === 'cmd') {
+      if (/%(?![0-9A-Fa-f]{2})/.test(value)) return 'contains %';
+      const special = ['!', '^'].find(c => value.includes(c));
+      if (special) return 'contains ' + special;
+    }
+    if (value.endsWith('\\')) return 'ends with \\';
+    return 'is "' + value + '"';
+  }
+
+  // Check a value before building commands, so a refusal names what is at fault. Settings
+  // (paths) may not contain ! or ^ for cmd at all: the command line also holds the URL's "!".
+  function checkValue(value, description, shell, setting) {
+    if (!value) return;
+    let ok = true;
+    try {
+      quoteArg(value, shell);
+    } catch (e) {
+      ok = false;
+    }
+    if (setting && shell === 'cmd' && /[!^]/.test(value)) ok = false;
+    if (!ok) {
+      throw new Error(description + ' ' + problemWith(value, shell) + ', which ' + SHELLS[shell] +
+        ' can\'t quote safely. ' + (setting ? 'Change the setting, or choose' : 'Choose') +
+        ' another terminal under "Format commands for".');
+    }
+  }
+
+  function checkSettings(options, shell) {
+    checkValue(options.ffmpegPath, 'Your ffmpeg path setting', shell, true);
+    checkValue(options.ytdlpPath, 'Your yt-dlp path setting', shell, true);
+    if (options.downloadFolder) {
+      checkValue(joinPath(options.downloadFolder, 'v.mp4', shell), 'Your download folder setting', shell, true);
+    }
+  }
+
   // Build every command the popup offers from the trimmed manifest URL.
   //   options: { filename, ffmpegPath, ytdlpPath, downloadFolder, cookiesBrowser, shell, token }
   //   streams: result of selectBestStreams(), or null if the manifest could not be read
@@ -249,6 +288,8 @@
     if (!isManifestUrl(url)) throw new Error('Not a SharePoint video manifest URL.');
     if (options.token && !isToken(options.token)) throw new Error('The access token has unexpected characters.');
     const shell = options.shell;
+    checkValue(url, 'The video\'s manifest URL', shell, false);
+    checkSettings(options, shell);
     const command = (program, args) => commandLine(program, args, shell);
     const ffmpeg = options.ffmpegPath || 'ffmpeg';
     const output = joinPath(options.downloadFolder, options.filename, shell);
@@ -289,6 +330,7 @@
   // Combine a downloaded video file and audio file into one MP4, without re-encoding.
   //   options: { ffmpegPath, shell }
   function muxCommand(videoFile, audioFile, outputFile, options) {
+    checkSettings({ ffmpegPath: options.ffmpegPath }, options.shell);
     return commandLine(options.ffmpegPath || 'ffmpeg', ['-i', videoFile, '-i', audioFile,
       '-map', '0:v', '-map', '1:a', '-c', 'copy', outputFile], options.shell);
   }
