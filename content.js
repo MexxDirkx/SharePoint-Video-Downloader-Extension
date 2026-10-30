@@ -8,6 +8,8 @@
   'use strict';
 
   const captured = { fileInfo: null, manifest: null, transcode: null, key: null, bearer: null, transcript: null };
+  // Identifies this document: the background worker ignores reports from replaced documents
+  const startedAt = Math.round(performance.timeOrigin);
   let lastReport = '';
   let reportTimer = null;
   let job = null;
@@ -30,6 +32,7 @@
     reportTimer = setTimeout(() => {
       const frame = {
         url: location.href,
+        startedAt,
         fileInfo: captured.fileInfo,
         manifest: captured.manifest,
         transcode: captured.transcode,
@@ -67,7 +70,10 @@
         if (isText(data)) captured.bearer = data;
         break;
       case 'transcript':
-        if (data && isText(data.temporaryDownloadUrl)) captured.transcript = data;
+        // Kept with the file it belongs to: the player may show several videos in turn
+        if (data && isText(data.temporaryDownloadUrl) && isText(data.url)) {
+          captured.transcript = Object.assign({}, data, { item: VideoMedia.itemKey(data.url) });
+        }
         break;
       case 'fileInfo':
         if (data && typeof data === 'object') {
@@ -92,7 +98,9 @@
   // Requests the page made, including ones the Resource Timing buffer dropped when full.
   function onResource(url) {
     if (VideoMedia.isTranscodeUrl(url)) {
+      const before = JSON.stringify(captured.transcode);
       captured.transcode = VideoMedia.addTranscodeUrl(captured.transcode, url);
+      if (JSON.stringify(captured.transcode) !== before) captured.transcode.at = Date.now();
       report();
     } else if (/\/videomanifest\?/i.test(url) && !/tempauth/i.test(url)) {
       onManifestUrl(url, null);
@@ -103,14 +111,23 @@
       .observe({ type: 'resource', buffered: true });
   } catch (e) { /* no PerformanceObserver; intercept.js and background.js still capture */ }
 
-  send({ type: 'frame-start' });
+  send({ type: 'frame-start', startedAt });
   report();
   refreshFromPage();
+  // Tell the background worker when this document goes away (navigation, removed iframe),
+  // and again when it comes back from the back/forward cache.
+  window.addEventListener('pagehide', () => send({ type: 'frame-gone', startedAt }));
+  window.addEventListener('pageshow', event => {
+    if (!event.persisted) return;
+    lastReport = '';
+    send({ type: 'frame-start', startedAt });
+    report();
+  });
 
   // ---------------------------------------------------------------------------------------
   // Requests from the popup
 
-  const handlers = { fetchManifest, transcript, downloadVideo, cancel };
+  const handlers = { ping, fetchManifest, transcript, downloadVideo, cancel };
 
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     const handler = handlers[request && request.action];
@@ -118,6 +135,10 @@
     handler(request).then(sendResponse, error => sendResponse({ error: error.message || String(error) }));
     return true;
   });
+
+  async function ping() {
+    return { ok: true };
+  }
 
   async function tabState() {
     const response = await send({ type: 'get-state' });
@@ -155,23 +176,28 @@
   }
 
   // Transcript: find it through SharePoint's API, then fetch it as JSON.
+  // request.item ("driveId/itemId") is the video the popup means, which can differ from the
+  // file this frame was opened for.
   async function transcript(request) {
     await refreshFromPage();
-    if (captured.fileInfo && captured.fileInfo.hasTranscripts === false) return { none: true };
-    let found = captured.transcript;
+    const state = await tabState();
+    const manifest = newestManifest(state);
+    const session = transcodeSession(state);
+    const context = VideoMedia.transcriptContext({
+      item: request.item,
+      spItemUrl: captured.fileInfo && captured.fileInfo.spItemUrl,
+      transcodeUrl: session && session.tracks.video.initUrl,
+      manifestUrl: manifest && manifest.url,
+      pathname: location.pathname
+    });
+    if (!context) {
+      return { error: 'Could not tell which file this video is. Reload the page, start the video and try again.' };
+    }
+    const item = context.driveId + '/' + context.itemId;
+    const ownFile = captured.fileInfo && VideoMedia.itemKey(captured.fileInfo.spItemUrl) === item;
+    if (ownFile && captured.fileInfo.hasTranscripts === false) return { none: true };
+    let found = captured.transcript && captured.transcript.item === item ? captured.transcript : null;
     if (!found) {
-      const state = await tabState();
-      const manifest = newestManifest(state);
-      const session = transcodeSession(state);
-      const context = VideoMedia.transcriptContext({
-        spItemUrl: captured.fileInfo && captured.fileInfo.spItemUrl,
-        transcodeUrl: session && session.tracks.video.initUrl,
-        manifestUrl: manifest && manifest.url,
-        pathname: location.pathname
-      });
-      if (!context) {
-        return { error: 'Could not tell which file this video is. Reload the page, start the video and try again.' };
-      }
       const headers = { Accept: 'application/json' };
       if (captured.bearer) headers.Authorization = captured.bearer;
       let status = 0;
@@ -211,7 +237,7 @@
       const now = Date.now();
       if (force || now - lastSent > 400) {
         lastSent = now;
-        send({ type: 'job', job: Object.assign({ state, text }, extra) });
+        send({ type: 'job', startedAt, job: Object.assign({ state, text, item: request.item || null }, extra) });
       }
     };
     job = { controller };

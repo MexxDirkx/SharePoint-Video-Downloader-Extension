@@ -275,27 +275,22 @@
 
   const SP_ITEM_PATH = /^(\/(?:personal|sites|teams)\/[^/]+)\/_api\/v[0-9.]+\/drives\/([^/]+)\/items\/([^/?]+)/;
 
-  // Site path, drive id and item id of the video, from the first source that has them:
-  // g_fileInfo's .spItemUrl, a oneDrive.transcode URL, the manifest's docid, the page path.
+  // Site path, drive id and item id of the video. The item is sources.item ("driveId/itemId")
+  // if given, else the first of: g_fileInfo's .spItemUrl, a oneDrive.transcode URL, the
+  // manifest's docid. The site path comes from a source about that same item, else the page.
   function transcriptContext(sources) {
-    const context = { sitePath: null, driveId: null, itemId: null };
-    const fill = (sitePath, driveId, itemId) => {
-      if (context.sitePath === null && sitePath !== undefined) context.sitePath = sitePath;
-      if (!context.driveId && driveId) {
-        context.driveId = driveId;
-        context.itemId = itemId;
-      }
-    };
+    const decode = value => { try { return decodeURIComponent(value); } catch (e) { return value; } };
+    const candidates = [];
     const fromItemUrl = url => {
       try {
         const match = SP_ITEM_PATH.exec(new URL(url).pathname);
-        if (match) fill(match[1], match[2], match[3]);
+        if (match) candidates.push({ sitePath: match[1], driveId: decode(match[2]), itemId: decode(match[3]) });
       } catch (e) { /* not a URL */ }
     };
     if (sources.spItemUrl) fromItemUrl(sources.spItemUrl);
     if (sources.transcodeUrl) {
       const match = /\/drives\/([^/]+)\/items\/([^/?]+)\//.exec(sources.transcodeUrl);
-      if (match) fill(undefined, match[1], match[2]);
+      if (match) candidates.push({ sitePath: null, driveId: decode(match[1]), itemId: decode(match[2]) });
     }
     if (sources.manifestUrl) {
       try {
@@ -303,11 +298,17 @@
         if (docid) fromItemUrl(docid);
       } catch (e) { /* not a URL */ }
     }
-    if (context.sitePath === null) {
-      const match = /^\/(?:personal|sites|teams)\/[^/]+/.exec(sources.pathname || '');
-      context.sitePath = match ? match[0] : '';
-    }
-    return context.driveId ? context : null;
+    const key = c => c.driveId + '/' + c.itemId;
+    const wanted = sources.item || (candidates[0] && key(candidates[0]));
+    const separator = wanted ? wanted.indexOf('/') : -1;
+    if (separator < 1) return null;
+    const same = candidates.find(c => key(c) === wanted && c.sitePath !== null);
+    const page = /^\/(?:personal|sites|teams)\/[^/]+/.exec(sources.pathname || '');
+    return {
+      sitePath: same ? same.sitePath : page ? page[0] : '',
+      driveId: wanted.slice(0, separator),
+      itemId: wanted.slice(separator + 1)
+    };
   }
 
   // The item-with-expand call the player makes, then the transcripts collection.
@@ -451,14 +452,38 @@
     return Object.assign({}, frame, { manifest: cleanManifest(frame && frame.manifest) });
   }
 
+  // "driveId/itemId" of the file a URL refers to: a SharePoint item URL, a oneDrive.transcode
+  // URL, or a videomanifest URL with the item URL in its docid.
+  function itemKey(url) {
+    let parsed;
+    try {
+      parsed = new URL(url);
+    } catch (e) {
+      return null;
+    }
+    const docid = parsed.searchParams.get('docid');
+    if (docid && /\/videomanifest$/i.test(parsed.pathname)) return itemKey(docid);
+    const match = /\/drives\/([^/]+)\/items\/([^/?]+)/.exec(parsed.pathname);
+    if (!match) return null;
+    const decode = value => { try { return decodeURIComponent(value); } catch (e) { return value; } };
+    return decode(match[1]) + '/' + decode(match[2]);
+  }
+
+  function frameItem(frame) {
+    return (frame.fileInfo && itemKey(frame.fileInfo.spItemUrl)) ||
+      (frame.manifest && itemKey(frame.manifest.url)) || (frame.transcode && itemKey(frame.transcode.item));
+  }
+
+  // Everything is tied to the video that played last (its drive and item id), so frames of
+  // other or earlier recordings in the same tab (Teams) don't supply the title, the
+  // transcript or the decryption key.
   function summarizeTab(state) {
     const frames = Object.keys((state && state.frames) || {}).map(id =>
       Object.assign({ frameId: Number(id) }, state.frames[id]));
     const net = (state && state.net) || {};
-    const hostOf = frame => { try { return new URL(frame.url).hostname; } catch (e) { return ''; } };
-    const spFrames = frames.filter(frame => SHAREPOINT_HOST.test(hostOf(frame)));
-    const contextFrame = spFrames.find(frame => frame.fileInfo && frame.fileInfo.spItemUrl) ||
-      spFrames.find(frame => frame.fileInfo) || spFrames[0] || null;
+    const originOf = frame => { try { return new URL(frame.url).origin; } catch (e) { return ''; } };
+    const newestFirst = list => list.slice().sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0));
+    const spFrames = newestFirst(frames.filter(frame => SHAREPOINT_HOST.test(originOf(frame))));
 
     // The manifest request the background worker saw on the network; what frames report
     // (which a page script can fake) only when there is none, newest first.
@@ -472,33 +497,47 @@
       if (withToken) manifest = Object.assign({}, manifest, { token: withToken.token });
     }
 
-    let transcode = net.transcode || null;
-    for (const frame of frames) {
-      if (!transcode || !transcodeTrackReady(transcode, 'video')) transcode = frame.transcode || transcode;
-    }
-    if (transcode && !transcodeTrackReady(transcode, 'video')) transcode = null;
+    const transcode = [net.transcode].concat(frames.map(frame => frame.transcode))
+      .filter(session => transcodeTrackReady(session, 'video'))
+      .sort((a, b) => (b.at || 0) - (a.at || 0))[0] || null;
+
+    let kind = manifest ? 'manifest' : transcode ? 'transcode' : null;
+    if (manifest && transcode && (transcode.at || 0) > (manifest.at || 0)) kind = 'transcode';
+    const item = kind === 'manifest' ? itemKey(manifest.url) : kind === 'transcode' ? itemKey(transcode.item) : null;
+    const ofItem = item ? spFrames.filter(frame => frameItem(frame) === item) : [];
 
     let video = null;
-    if (manifest) {
-      const frame = frames.find(f => f.frameId === manifest.frameId) || contextFrame;
-      video = { kind: 'manifest', frameId: frame ? frame.frameId : 0, manifestUrl: manifest.url, token: manifest.token || null };
-    } else if (transcode) {
+    if (kind === 'manifest') {
+      const frame = ofItem[0] || frames.find(f => f.frameId === manifest.frameId) || spFrames[0];
+      video = { kind, frameId: frame ? frame.frameId : 0, manifestUrl: manifest.url, token: manifest.token || null };
+    } else if (kind === 'transcode') {
+      // Segments are fetched from the page, so the frame must have the stream's origin
       const origin = new URL(transcode.item).origin;
-      const sameOrigin = frames.filter(frame => { try { return new URL(frame.url).origin === origin; } catch (e) { return false; } });
-      const frame = sameOrigin.find(f => f.hasKey) || sameOrigin[0];
-      video = { kind: 'transcode', frameId: frame ? frame.frameId : null, hasKey: !!(frame && frame.hasKey),
+      const sameOrigin = newestFirst(frames.filter(frame => originOf(frame) === origin));
+      const ofItemSameOrigin = ofItem.filter(frame => originOf(frame) === origin);
+      // Without a frame known to show this video, take the newest: an older frame's key
+      // belongs to another recording
+      const byKey = (a, b) => (b.startedAt || 0) - (a.startedAt || 0) || !!b.hasKey - !!a.hasKey;
+      const frame = ofItemSameOrigin.find(f => f.hasKey) || ofItemSameOrigin[0] || sameOrigin.sort(byKey)[0];
+      video = { kind, frameId: frame ? frame.frameId : null, hasKey: !!(frame && frame.hasKey),
         hasAudio: transcodeTrackReady(transcode, 'audio'), transcode };
     }
 
-    const fileInfo = contextFrame && contextFrame.fileInfo;
-    const name = fileInfo && (fileInfo.displayName || fileInfo.name);
+    // Title and transcript come from the frame showing the video; with no video yet, from
+    // the newest SharePoint frame that knows its file.
+    const contextFrame = video ? ofItem[0] || frames.find(f => f.frameId === video.frameId) || null :
+      spFrames.find(f => f.fileInfo && f.fileInfo.spItemUrl) || spFrames.find(f => f.fileInfo) || spFrames[0] || null;
+    const contextItem = contextFrame && frameItem(contextFrame);
+    const fileInfo = contextFrame && contextFrame.fileInfo && (!item || !contextItem || contextItem === item) ?
+      contextFrame.fileInfo : null;
     return {
       video,
+      item: item || contextItem || null,
       // Frame that can try the original file and does the in-page work when no stream was seen
       pageFrameId: video && video.frameId !== null ? video.frameId : contextFrame ? contextFrame.frameId : null,
       transcriptFrameId: contextFrame ? contextFrame.frameId : video ? video.frameId : null,
       hasTranscripts: fileInfo ? fileInfo.hasTranscripts : undefined,
-      title: name || null
+      title: fileInfo ? fileInfo.displayName || fileInfo.name || null : null
     };
   }
 
@@ -524,6 +563,7 @@
     looksLikeVideo,
     fileBaseName,
     cleanFrame,
+    itemKey,
     summarizeTab
   };
 

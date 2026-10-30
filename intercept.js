@@ -54,7 +54,7 @@
     }
   }
 
-  function onTranscriptMetadata(data) {
+  function onTranscriptMetadata(url, data) {
     const pick = list => list.find(t => t && t.isDefault) || list[0];
     let transcript = null;
     if (data && data.media && Array.isArray(data.media.transcripts) && data.media.transcripts.length) {
@@ -66,6 +66,7 @@
     }
     if (transcript && typeof transcript.temporaryDownloadUrl === 'string') {
       post('transcript', {
+        url: url.href,
         temporaryDownloadUrl: transcript.temporaryDownloadUrl,
         displayName: transcript.displayName || null,
         languageTag: transcript.languageTag || null
@@ -102,7 +103,7 @@
     } catch (e) { /* never break the page's request */ }
     const result = originalFetch.apply(this, arguments);
     if (url && isTranscriptMetadata(url)) {
-      result.then(response => response.clone().json()).then(onTranscriptMetadata, () => {});
+      result.then(response => response.clone().json()).then(data => onTranscriptMetadata(url, data), () => {});
     }
     return result;
   };
@@ -129,7 +130,7 @@
         if (isTranscriptMetadata(request.url)) {
           this.addEventListener('load', function () {
             try {
-              onTranscriptMetadata(this.responseType === 'json' ? this.response : JSON.parse(this.responseText));
+              onTranscriptMetadata(request.url, this.responseType === 'json' ? this.response : JSON.parse(this.responseText));
             } catch (e) { /* not JSON */ }
           });
         }

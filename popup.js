@@ -108,9 +108,41 @@ document.addEventListener('DOMContentLoaded', function() {
     function refresh() {
       chrome.runtime.sendMessage({type: 'get-state', tabId: tab.id}, function(response) {
         if(chrome.runtime.lastError || !response) return;
+        // The tab left the page the state was captured on (e.g. to a site the extension
+        // doesn't run on, so nothing reported the navigation)
+        const top = response.state.frames[0];
+        if(top && tab.url && originOf(top.url) !== originOf(tab.url)) {
+          chrome.runtime.sendMessage({type: 'reset-tab', tabId: tab.id});
+          response = {state: {frames: {}, net: {}, job: null}, summary: VideoMedia.summarizeTab(null)};
+        }
         summary = response.summary;
         render(response.state);
+        checkFrames(response.state);
       });
+    }
+
+    function originOf(url) {
+      try {
+        return new URL(url).origin;
+      } catch (e) {
+        return '';
+      }
+    }
+
+    // Frames that were removed or navigated without saying so: forget them so the summary
+    // and a stuck download job move on.
+    const lastPing = {};
+    function checkFrames(state) {
+      const ids = [summary.pageFrameId, summary.transcriptFrameId, state.job && state.job.frameId];
+      for (const frameId of new Set(ids.filter(id => typeof id === 'number'))) {
+        if (Date.now() - (lastPing[frameId] || 0) < 2000) continue;
+        lastPing[frameId] = Date.now();
+        chrome.tabs.sendMessage(tab.id, {action: 'ping'}, {frameId: frameId}, function(response) {
+          if(chrome.runtime.lastError || !response) {
+            chrome.runtime.sendMessage({type: 'frame-gone', tabId: tab.id, frameId: frameId});
+          }
+        });
+      }
     }
 
     function render(state) {
@@ -131,8 +163,10 @@ document.addEventListener('DOMContentLoaded', function() {
         filenameInput.value = VideoMedia.fileBaseName(summary.title || tab.title || 'video');
       }
 
-      job = state.job;
+      // A job whose frame is gone is stale; a finished one is shown for its own video only
+      job = state.job && state.frames[state.job.frameId] ? state.job : null;
       const running = !!job && (job.state === 'running' || job.state === 'waiting');
+      if(job && !running && job.item && summary.item && job.item !== summary.item) job = null;
       downloadVideoButton.disabled = summary.pageFrameId === null || running;
       const noTranscript = summary.transcriptFrameId === null || summary.hasTranscripts === false;
       downloadSrtButton.disabled = noTranscript;
@@ -182,6 +216,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         sendToFrame(summary.pageFrameId, {
           action: 'downloadVideo',
+          item: summary.item,
           baseName: base,
           muxCommand: muxCommand,
           saveMode: settings.saveMode
@@ -216,7 +251,7 @@ document.addEventListener('DOMContentLoaded', function() {
     function downloadTranscript(format) {
       if(!summary || summary.transcriptFrameId === null) return;
       showStatus('Getting the transcript...', true, 0);
-      sendToFrame(summary.transcriptFrameId, {action: 'transcript', format: format}, function(response) {
+      sendToFrame(summary.transcriptFrameId, {action: 'transcript', format: format, item: summary.item}, function(response) {
         if(response.none) {
           showStatus('This video has no transcript.', false, 0);
         } else if(response.error) {

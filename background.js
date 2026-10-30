@@ -54,7 +54,7 @@ chrome.webRequest.onSendHeaders.addListener(details => {
     const previous = state.net.manifest;
     if (previous && previous.url === url && (previous.token === token || !token)) return false;
     state.net.manifest = { url, token: token || (previous && previous.url === url ? previous.token : null),
-      frameId: details.frameId, at: Date.now() };
+      frameId: details.frameId, at: details.timeStamp || Date.now() };
   });
 }, { urls: ['https://*.svc.ms/*videomanifest*'] }, ['requestHeaders', 'extraHeaders']);
 
@@ -64,6 +64,7 @@ chrome.webRequest.onBeforeRequest.addListener(details => {
     const before = JSON.stringify(state.net.transcode || null);
     state.net.transcode = VideoMedia.addTranscodeUrl(state.net.transcode || null, details.url);
     if (JSON.stringify(state.net.transcode) === before) return false;
+    state.net.transcode.at = details.timeStamp || Date.now();
   });
 }, { urls: PAGE_HOSTS.map(host => 'https://' + host + '/*oneDrive.transcode*') });
 
@@ -72,27 +73,61 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const fromExtensionPage = (sender.url || '').startsWith(chrome.runtime.getURL(''));
   const tabId = fromExtensionPage ? message.tabId : sender.tab && sender.tab.id;
   if (typeof tabId !== 'number') return;
+  // Messages and network events can arrive out of order, so each frame report carries the
+  // start time of its document (startedAt) and older documents are ignored.
+  const startedAt = Number(message.startedAt) || 0;
+  const frameId = fromExtensionPage ? message.frameId : sender.frameId;
   switch (message.type) {
     case 'frame-start':
-      // A new document in a frame: forget what was captured for the old one.
+      // A new document in a frame: forget the old one, and its download
       update(tabId, state => {
-        if (sender.frameId === 0) {
-          state.frames = {};
-          state.net = {};
-          state.job = null;
-        } else {
-          delete state.frames[sender.frameId];
+        const current = state.frames[frameId];
+        if (current && current.startedAt > startedAt) return false;
+        if (frameId === 0) {
+          // A new page: drop what belongs to earlier documents
+          state.top = startedAt;
+          for (const id of Object.keys(state.frames)) {
+            if (!(state.frames[id].startedAt >= startedAt)) delete state.frames[id];
+          }
+          for (const key of ['manifest', 'transcode']) {
+            if (state.net[key] && !(state.net[key].at >= startedAt)) delete state.net[key];
+          }
         }
+        state.frames[frameId] = { url: sender.url, startedAt };
+        if (state.job && (state.job.frameId === frameId || !state.frames[state.job.frameId])) state.job = null;
+      });
+      break;
+    case 'frame-gone':
+      // The frame's document unloaded (content script), or it stopped answering (popup)
+      update(tabId, state => {
+        const current = state.frames[frameId];
+        if (current && !fromExtensionPage && current.startedAt !== startedAt) return false;
+        delete state.frames[frameId];
+        if (state.job && state.job.frameId === frameId) state.job = null;
+      });
+      break;
+    case 'reset-tab':
+      if (!fromExtensionPage) return;
+      update(tabId, state => {
+        state.frames = {};
+        state.net = {};
+        state.job = null;
+        state.top = 0;
       });
       break;
     case 'capture':
       update(tabId, state => {
-        state.frames[sender.frameId] = VideoMedia.cleanFrame(message.frame);
+        const frame = VideoMedia.cleanFrame(message.frame);
+        const current = state.frames[frameId];
+        if (!(frame.startedAt >= (state.top || 0)) || (current && current.startedAt > frame.startedAt)) return false;
+        state.frames[frameId] = frame;
       });
       break;
     case 'job':
       update(tabId, state => {
-        state.job = Object.assign({ frameId: sender.frameId, at: Date.now() }, message.job);
+        const current = state.frames[frameId];
+        if (!current || current.startedAt !== startedAt) return false;
+        state.job = Object.assign({ frameId, at: Date.now() }, message.job);
       });
       break;
     case 'get-state':
