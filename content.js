@@ -1,126 +1,190 @@
 // content.js
-chrome.runtime.onMessage.addListener(function(request, sender, sendResponse) {
-    if(request.action === "detectVideo") {
-      // Find video manifest URL from network requests
-      let foundUrl = null;
-      
-      // Check if we can access the network requests
-      if(window.performance && window.performance.getEntries) {
-        const entries = window.performance.getEntries();
-        for(let i = 0; i < entries.length; i++) {
-          const entry = entries[i];
-          if(entry.name && typeof entry.name === 'string' && 
-             entry.name.includes('videomanifest?provider')) {
-            foundUrl = entry.name;
-            break;
-          }
-        }
+// Runs in every frame of SharePoint and Teams pages, in the extension's isolated world.
+//  - Collects what intercept.js (the page's own world) and the page's Resource Timing reveal
+//    about the video, its transcript and the file, and reports it to background.js.
+//  - Handles the popup's requests: read the manifest, download the transcript.
+(function () {
+  'use strict';
+
+  const captured = { fileInfo: null, manifest: null, transcode: null, key: null, bearer: null, transcript: null };
+  let lastReport = '';
+  let reportTimer = null;
+
+  function send(message) {
+    return new Promise(resolve => {
+      try {
+        chrome.runtime.sendMessage(message, response => {
+          void chrome.runtime.lastError;
+          resolve(response);
+        });
+      } catch (e) {
+        resolve(undefined); // extension was reloaded; this script is orphaned
       }
-      
-      // If we didn't find it, try an alternative approach
-      if(!foundUrl) {
-        // Look for video elements
-        const videoElements = document.querySelectorAll('video');
-        for(let i = 0; i < videoElements.length; i++) {
-          const video = videoElements[i];
-          if(video.src && video.src.includes('videomanifest')) {
-            foundUrl = video.src;
-            break;
-          }
-        }
-        
-        // Try to get manifest URL from any source available
-        if(!foundUrl) {
-          // Insert a script to watch XHR requests
-          const script = document.createElement('script');
-          script.textContent = `
-            (function() {
-              // Listen for video manifest URL
-              window.addEventListener('message', function(event) {
-                if(event.data && event.data.type === 'VIDEO_MANIFEST_URL') {
-                  window.postMessage({type: 'VIDEO_MANIFEST_FOUND', url: event.data.url}, '*');
-                }
-              });
-              
-              // Watch for XHR requests
-              const originalOpen = XMLHttpRequest.prototype.open;
-              XMLHttpRequest.prototype.open = function(method, url) {
-                if(url && url.includes('videomanifest?provider')) {
-                  window.postMessage({type: 'VIDEO_MANIFEST_FOUND', url: url}, '*');
-                }
-                return originalOpen.apply(this, arguments);
-              };
-            })();
-          `;
-          
-          document.head.appendChild(script);
-          
-          // Listen for messages from the injected script
-          window.addEventListener('message', function(event) {
-            if(event.data && event.data.type === 'VIDEO_MANIFEST_FOUND') {
-              foundUrl = event.data.url;
-              sendResponse({videoManifestUrl: foundUrl});
-            }
-          });
-          
-          // If we still don't have a URL, prompt the user to play the video
-          if(!foundUrl) {
-            alert('Please start playing the video to detect the URL. Then click "Detect Video" again.');
-          }
-        }
+    });
+  }
+
+  function report() {
+    clearTimeout(reportTimer);
+    reportTimer = setTimeout(() => {
+      const frame = {
+        url: location.href,
+        fileInfo: captured.fileInfo,
+        manifest: captured.manifest,
+        transcode: captured.transcode,
+        hasKey: !!captured.key
+      };
+      const text = JSON.stringify(frame);
+      if (text !== lastReport) {
+        lastReport = text;
+        send({ type: 'capture', frame });
       }
-      
-      if(foundUrl) {
-        sendResponse({videoManifestUrl: foundUrl});
-      }
-      
-      // Return true to indicate we'll send a response asynchronously
-      return true;
+    }, 100);
+  }
+
+  function onManifestUrl(url, token) {
+    const trimmed = VideoCommands.trimManifestUrl(url);
+    const previous = captured.manifest;
+    if (previous && previous.url === trimmed && (previous.token || !token)) return;
+    captured.manifest = { url: trimmed, token: token || null, at: previous && previous.url === trimmed ? previous.at : Date.now() };
+    report();
+  }
+
+  // Messages from intercept.js
+  window.addEventListener('message', event => {
+    if (event.source !== window || !event.data || event.data.source !== 'spvd-intercept') return;
+    const data = event.data.data;
+    const isText = value => typeof value === 'string' && value.length > 0;
+    switch (event.data.kind) {
+      case 'manifest':
+        if (data && isText(data.url)) onManifestUrl(data.url, isText(data.token) ? data.token : null);
+        break;
+      case 'bearer':
+        if (isText(data)) captured.bearer = data;
+        break;
+      case 'transcript':
+        if (data && isText(data.temporaryDownloadUrl)) captured.transcript = data;
+        break;
+      case 'fileInfo':
+        if (data && typeof data === 'object') {
+          captured.fileInfo = data;
+          report();
+        }
+        break;
+      case 'key':
+        if (data && Array.isArray(data.key) && data.key.length === 16 && Array.isArray(data.iv) && data.iv.length === 16) {
+          captured.key = data;
+          report();
+        }
+        break;
     }
   });
 
+  function refreshFromPage() {
+    window.postMessage({ source: 'spvd-content', kind: 'refresh' }, '*');
+    return new Promise(resolve => setTimeout(resolve, 200));
+  }
 
-
-  chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
-    if (request.action === "detectTranscript") {
-        let transcriptUrl = null;
-
-        if (window.performance && window.performance.getEntries) {
-            const entries = window.performance.getEntries();
-            for (let i = 0; i < entries.length; i++) {
-                const entry = entries[i];
-                if (entry.name.includes('/streamContent?format=json')) {
-                    transcriptUrl = entry.name;
-                    break;
-                }
-            }
-        }
-
-        if (transcriptUrl) {
-            fetch(transcriptUrl)
-                .then(response => response.json())
-                .then(data => sendResponse({ transcript: data }))
-                .catch(() => sendResponse({ transcript: null }));
-            return true;
-        }
-
-        sendResponse({ transcript: null });
+  // Requests the page made, including ones the Resource Timing buffer dropped when full.
+  function onResource(url) {
+    if (VideoMedia.isTranscodeUrl(url)) {
+      captured.transcode = VideoMedia.addTranscodeUrl(captured.transcode, url);
+      report();
+    } else if (/\/videomanifest\?/i.test(url) && !/tempauth/i.test(url)) {
+      onManifestUrl(url, null);
     }
-});
+  }
+  try {
+    new PerformanceObserver(list => list.getEntries().forEach(entry => onResource(entry.name)))
+      .observe({ type: 'resource', buffered: true });
+  } catch (e) { /* no PerformanceObserver; intercept.js and background.js still capture */ }
 
+  send({ type: 'frame-start' });
+  report();
+  refreshFromPage();
 
-// Fetch the DASH manifest for the popup, which reads it to find the best quality streams.
-// Fetching from the page makes the request under the page's origin, as the player does.
-// No cookies are sent, so the request matches what ffmpeg does with the same URL.
-chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
-    if (request.action === "fetchManifest") {
-        fetch(request.url, { credentials: 'omit' })
-            .then(response => {
-                if (!response.ok) throw new Error('HTTP ' + response.status);
-                return response.text();
-            })
-            .then(text => sendResponse({ manifest: text }))
-            .catch(error => sendResponse({ error: error.message }));
-        return true;
+  // ---------------------------------------------------------------------------------------
+  // Requests from the popup
+
+  const handlers = { fetchManifest, transcript };
+
+  chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    const handler = handlers[request && request.action];
+    if (!handler) return;
+    handler(request).then(sendResponse, error => sendResponse({ error: error.message || String(error) }));
+    return true;
+  });
+
+  async function tabState() {
+    const response = await send({ type: 'get-state' });
+    return (response && response.state) || { frames: {}, net: {} };
+  }
+
+  // The manifest is fetched like the player does: with its X-SPOPacToken, without cookies.
+  async function fetchManifestText(url, token) {
+    const response = await fetch(url, { credentials: 'omit', headers: token ? { 'x-spopactoken': token } : {} });
+    if (!response.ok) {
+      throw new Error('Reading the manifest failed: HTTP ' + response.status +
+        (response.status === 401 ? ' (the access token was missing or has expired; reload the page and play the video again)' : ''));
     }
-});
+    return response.text();
+  }
+
+  async function fetchManifest(request) {
+    return { manifest: await fetchManifestText(request.url, request.token) };
+  }
+
+  function newestManifest(state) {
+    const candidates = [captured.manifest, state.net && state.net.manifest].filter(Boolean)
+      .sort((a, b) => (b.at || 0) - (a.at || 0));
+    const manifest = candidates[0];
+    if (manifest && !manifest.token) {
+      const withToken = candidates.find(m => m.url === manifest.url && m.token);
+      if (withToken) return Object.assign({}, manifest, { token: withToken.token });
+    }
+    return manifest || null;
+  }
+
+  function transcodeSession(state) {
+    return [state.net && state.net.transcode, captured.transcode]
+      .find(session => VideoMedia.transcodeTrackReady(session, 'video')) || null;
+  }
+
+  // Transcript: find it through SharePoint's API, then fetch it as JSON.
+  async function transcript(request) {
+    await refreshFromPage();
+    if (captured.fileInfo && captured.fileInfo.hasTranscripts === false) return { none: true };
+    let found = captured.transcript;
+    if (!found) {
+      const state = await tabState();
+      const manifest = newestManifest(state);
+      const session = transcodeSession(state);
+      const context = VideoMedia.transcriptContext({
+        spItemUrl: captured.fileInfo && captured.fileInfo.spItemUrl,
+        transcodeUrl: session && session.tracks.video.initUrl,
+        manifestUrl: manifest && manifest.url,
+        pathname: location.pathname
+      });
+      if (!context) {
+        return { error: 'Could not tell which file this video is. Reload the page, start the video and try again.' };
+      }
+      const headers = { Accept: 'application/json' };
+      if (captured.bearer) headers.Authorization = captured.bearer;
+      let status = 0;
+      for (const url of VideoMedia.transcriptMetadataUrls(location.origin, context)) {
+        const response = await fetch(url, { credentials: 'include', headers });
+        status = response.status;
+        if (!response.ok) continue;
+        const result = VideoMedia.transcriptFromMetadata(await response.json());
+        if (result.none) return { none: true };
+        found = result.transcript;
+        break;
+      }
+      if (!found) return { error: 'Could not look up the transcript' + (status ? ' (HTTP ' + status + ')' : '') + '.' };
+    }
+    const response = await fetch(VideoMedia.transcriptJsonUrl(found.temporaryDownloadUrl, location.hostname));
+    if (!response.ok) return { error: 'Downloading the transcript failed: HTTP ' + response.status };
+    const json = await response.json();
+    const text = request.format === 'vtt' ? VideoMedia.toVtt(json) : VideoMedia.toSrt(json);
+    return { text, entries: ((json && json.entries) || []).length };
+  }
+})();

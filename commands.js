@@ -189,15 +189,21 @@
     return selectBestStreams(doc);
   }
 
+  function commandLine(program, args, shell) {
+    return [formatProgram(program, shell)].concat(args.map(arg => quoteArg(arg, shell))).join(' ');
+  }
+
   // Build every command the popup offers from the trimmed manifest URL.
-  //   options: { filename, ffmpegPath, ytdlpPath, downloadFolder, cookiesBrowser, shell }
+  //   options: { filename, ffmpegPath, ytdlpPath, downloadFolder, cookiesBrowser, shell, token }
   //   streams: result of selectBestStreams(), or null if the manifest could not be read
+  // token is the player's X-SPOPacToken; the media service answers 401 without it.
   function buildCommands(url, options, streams) {
     const shell = options.shell;
-    const command = (program, args) =>
-      [formatProgram(program, shell)].concat(args.map(arg => quoteArg(arg, shell))).join(' ');
+    const command = (program, args) => commandLine(program, args, shell);
     const ffmpeg = options.ffmpegPath || 'ffmpeg';
     const output = joinPath(options.downloadFolder, options.filename, shell);
+    // ffmpeg adds the CRLF that ends a -headers value itself (with a warning)
+    const input = (options.token ? ['-headers', 'X-SPOPacToken: ' + options.token] : []).concat('-i', url);
 
     // Without -map ffmpeg picks the highest-resolution video, but for audio the first stream
     // with the most channels, which on SharePoint is the lowest bitrate.
@@ -214,15 +220,18 @@
     if (options.ffmpegPath) {
       ytdlpArgs.push('--ffmpeg-location', options.ffmpegPath);
     }
+    if (options.token) {
+      ytdlpArgs.push('--add-header', 'X-SPOPacToken:' + options.token);
+    }
     // "bv*+ba/b": best video plus best audio, else the best single file. "%" is escaped
     // because -o is an output template.
     ytdlpArgs.push('-f', 'bv*+ba/b', '--merge-output-format', 'mp4',
       '-o', output.replace(/%/g, '%%'), url);
 
     return {
-      ffmpeg: command(ffmpeg, ['-i', url, '-c', 'copy', output]),
-      ffmpegBest: command(ffmpeg, ['-i', url].concat(bestMaps, ['-c', 'copy', output])),
-      ffprobe: command(ffprobePathFor(options.ffmpegPath), ['-i', url, '-show_streams']),
+      ffmpeg: command(ffmpeg, input.concat('-c', 'copy', output)),
+      ffmpegBest: command(ffmpeg, input.concat(bestMaps, '-c', 'copy', output)),
+      ffprobe: command(ffprobePathFor(options.ffmpegPath), input.concat('-show_streams')),
       ytdlp: command(options.ytdlpPath || 'yt-dlp', ytdlpArgs)
     };
   }

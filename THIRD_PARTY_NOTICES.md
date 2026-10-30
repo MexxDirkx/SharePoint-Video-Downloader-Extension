@@ -6,6 +6,8 @@ Parts of this extension are adapted from
 [ms-teams-sharepoint-downloader](https://github.com/brendangooden/ms-teams-sharepoint-downloader)
 by Brendan Gooden (version 1.7.1, commit 83664b2f):
 
+- `intercept.js`: capturing the manifest URL with its X-SPOPacToken header, the API bearer,
+  transcript metadata, `g_fileInfo` and the decryption key in `g_streamBootstrapContent`
 - `media.js`: DASH-SEA key and IV handling, oneDrive.transcode segment enumeration, the
   transcript API calls and their response shapes
 
