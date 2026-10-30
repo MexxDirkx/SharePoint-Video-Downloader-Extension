@@ -11,6 +11,10 @@
 
   const CONCURRENCY = 4;
   const MAX_ATTEMPTS = 8;
+  // Parts can arrive out of order; when they are written to a file, no more than this many
+  // past the next one to write are fetched, so a part being retried doesn't let the rest
+  // pile up in memory.
+  const AHEAD = 2 * CONCURRENCY;
 
   function cancelled() {
     return Object.assign(new Error('Download cancelled'), { name: 'AbortError' });
@@ -56,6 +60,9 @@
     let size = 0;
     return {
       filename,
+      room() {
+        return Promise.resolve();
+      },
       put(index, buffer) {
         parts[index] = new Blob([buffer]);
         size += buffer.byteLength;
@@ -69,16 +76,47 @@
     };
   }
 
-  // Streams a track, in order, to a file in a folder the user picked.
-  async function fileSink(directory, filename) {
+  // A file name in the folder that isn't taken yet: "name.ext", "name (1).ext", ...
+  async function freeName(directory, filename) {
+    const dot = filename.lastIndexOf('.');
+    const base = dot > 0 ? filename.slice(0, dot) : filename;
+    const extension = dot > 0 ? filename.slice(dot) : '';
+    for (let i = 0; i < 1000; i++) {
+      const name = i ? base + ' (' + i + ')' + extension : filename;
+      try {
+        await directory.getFileHandle(name);
+      } catch (e) {
+        if (e.name === 'NotFoundError') return name;
+        if (e.name !== 'TypeMismatchError') throw e; // a folder with that name
+      }
+    }
+    throw new Error('The folder already has too many files named ' + filename);
+  }
+
+  // Streams a track, in order, to a new file in a folder the user picked. A download that
+  // fails or is cancelled leaves no file behind.
+  async function fileSink(directory, wantedName) {
+    const filename = await freeName(directory, wantedName);
     const handle = await directory.getFileHandle(filename, { create: true });
     const writable = await handle.createWritable();
     const pending = new Map();
+    let waiting = [];
     let next = 0;
     let size = 0;
+    let aborted = false;
     let writing = Promise.resolve();
+    const wake = () => {
+      const ready = waiting.filter(w => aborted || w.index < next + AHEAD);
+      waiting = waiting.filter(w => !ready.includes(w));
+      ready.forEach(w => (aborted ? w.reject(cancelled()) : w.resolve()));
+    };
     return {
       filename,
+      // Resolves when part `index` may be fetched
+      room(index) {
+        if (index < next + AHEAD) return Promise.resolve();
+        return new Promise((resolve, reject) => waiting.push({ index, resolve, reject }));
+      },
       put(index, buffer) {
         pending.set(index, buffer);
         writing = writing.then(async () => {
@@ -87,6 +125,7 @@
             pending.delete(next++);
             await writable.write(data);
             size += data.byteLength;
+            wake();
           }
         });
         return writing;
@@ -96,8 +135,13 @@
         await writable.close();
         return { filename, size, saved: true };
       },
-      abort() {
-        writing.then(() => writable.abort()).catch(() => {});
+      async abort() {
+        aborted = true;
+        pending.clear();
+        wake();
+        await writing.catch(() => {});
+        await writable.abort().catch(() => {});
+        await directory.removeEntry(filename).catch(() => {});
       }
     };
   }
@@ -165,8 +209,10 @@
     let failed = false;
     async function worker() {
       while (!failed && nextJob < jobs.length) {
+        const job = jobs[nextJob++];
         try {
-          await fetchPart(jobs[nextJob++]);
+          await job.track.sink.room(job.index);
+          await fetchPart(job);
         } catch (e) {
           failed = true;
           throw e;
@@ -179,7 +225,8 @@
       for (let i = 0; i < CONCURRENCY; i++) workers.push(worker());
       await Promise.all(workers);
     } catch (e) {
-      tracks.forEach(track => track.sink.abort());
+      failed = true;
+      await Promise.all(tracks.map(track => track.sink.abort()));
       throw signal.aborted ? cancelled() : e;
     }
     const files = [];

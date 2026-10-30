@@ -299,16 +299,27 @@
         panel.button('Save ' + file.filename, () => VideoDownloader.saveBlob(file.blob, file.filename));
       }
     }
-    if (separate && request.muxCommand) {
-      panel.code(request.muxCommand);
-      panel.button('Copy ffmpeg command', () => navigator.clipboard.writeText(request.muxCommand).catch(() => {}), true);
+    // Built from the actual file names (a folder may already have had files with those names)
+    let muxCommand = null;
+    if (separate) {
+      try {
+        const fileOf = type => files[tracks.findIndex(track => track.type === type)].filename;
+        muxCommand = VideoCommands.muxCommand(fileOf('video'), fileOf('audio'), request.baseName + '.mp4',
+          request.commandOptions || {});
+      } catch (e) {
+        // an ffmpeg path that can't be quoted for the chosen shell; the files are fine
+      }
+    }
+    if (muxCommand) {
+      panel.code(muxCommand);
+      panel.button('Copy ffmpeg command', () => navigator.clipboard.writeText(muxCommand).catch(() => {}), true);
     }
     const muxNote = separate ? ' To combine video and audio into one file, run the ffmpeg command below in the folder with the files.' : '';
     return {
       text: (directory ? 'Saved ' + sizes + ' in the folder you chose.' :
         'Downloaded ' + sizes + '. Use the Save buttons in the panel on the page to store them.') + muxNote + noAudio,
       files: summary(files),
-      muxCommand: separate && request.muxCommand ? request.muxCommand : null
+      muxCommand
     };
   }
 

@@ -209,18 +209,12 @@ document.addEventListener('DOMContentLoaded', function() {
     downloadVideoButton.addEventListener('click', function() {
       if(!summary || summary.pageFrameId === null) return;
       readSettings(function(settings) {
-        const base = baseName();
-        let muxCommand = '';
-        try {
-          muxCommand = VideoCommands.muxCommand(base + '.video.mp4', base + '.audio.m4a', base + '.mp4', settings);
-        } catch (e) {
-          // a download folder or ffmpeg path that can't be quoted; the download itself still works
-        }
         sendToFrame(summary.pageFrameId, {
           action: 'downloadVideo',
           item: summary.item,
-          baseName: base,
-          muxCommand: muxCommand,
+          baseName: baseName(),
+          // for the command that combines the files, which the page builds once their names are known
+          commandOptions: {shell: settings.shell, ffmpegPath: settings.ffmpegPath},
           saveMode: settings.saveMode
         }, function(response) {
           if(response.error) {
